@@ -1,5 +1,7 @@
 //! make it drum — kit player : un instrument VST3/CLAP qui joue les kits de
 //! 20 percussions produits par la page make it drum, depuis le MIDI.
+// `nih_export_vst3!` déclenche ce lint sur les rustc récents (macro vst3_com::vtable).
+#![allow(semicolon_in_expressions_from_non_local_macros)]
 pub mod editor;
 pub mod loader;
 pub mod params;
