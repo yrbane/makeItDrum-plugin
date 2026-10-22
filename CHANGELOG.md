@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0 — 2026-10-22 · « Audio Unit pour Logic et GarageBand »
+
+- **Audio Unit v2** (`make it drum.component`) pour macOS, construit en CI avec [clap-wrapper](https://github.com/free-audio/clap-wrapper) autour du CLAP universel (arm64 + x86_64), CLAP embarqué dans le composant : Logic Pro, GarageBand et MainStage voient l'instrument (type `aumu`, fabricant `SaGz`, sous-type `MkDr`).
+- **Validation `auval`** à chaque build macOS : la CI échoue si Apple refuse le composant.
+- **Archive macOS** : `make-it-drum-macos-universal.zip` contient désormais VST3 + CLAP + AU ; gabarit CMake dans `au/`.
+- README : tableau des DAW couverts par format (VST3, CLAP, AU) et installation du `.component`.
+- `Cargo.lock` complété avec les dépendances du binaire autonome.
+
 ## 0.1.0 — 2026-10-22 · « Premier lecteur de kits »
 
 - **Instrument VST3 et CLAP** (nih-plug, Rust) qui joue les kits de 20 percussions produits par [make it drum](https://github.com/yrbane/makeItDrum) depuis le MIDI : pad `i` → note General MIDI `36 + i` (BOOM = 36 … CHAOS = 55).

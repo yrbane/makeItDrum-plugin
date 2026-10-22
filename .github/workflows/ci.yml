@@ -1,4 +1,5 @@
-# Intégration continue : format, lints, tests, puis bundles VST3/CLAP par plateforme.
+# Intégration continue : format, lints, tests, puis bundles VST3/CLAP par plateforme
+# (+ Audio Unit validé par auval sur macOS).
 name: CI
 
 on:
@@ -57,6 +58,21 @@ jobs:
       - name: Bundle
         if: matrix.name != 'macos-universal'
         run: cargo xtask bundle make-it-drum --release --target ${{ matrix.target }}
+      - name: Audio Unit (clap-wrapper autour du CLAP universel)
+        if: matrix.name == 'macos-universal'
+        run: |
+          cmake -S au -B au/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build au/build --parallel
+          codesign --force --deep --sign - "au/build/make it drum.component"
+          cp -R "au/build/make it drum.component" target/bundled/
+          find "target/bundled/make it drum.component" -maxdepth 4 | head -30
+      - name: Validation auval
+        if: matrix.name == 'macos-universal'
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R "target/bundled/make it drum.component" ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          auval -v aumu MkDr SaGz
       - name: Archive
         shell: bash
         run: |
@@ -64,6 +80,8 @@ jobs:
           ls -la
           if [ "${{ runner.os }}" = "Windows" ]; then
             7z a "../../make-it-drum-${{ matrix.name }}.zip" "make it drum.vst3" "make it drum.clap"
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            zip -r "../../make-it-drum-${{ matrix.name }}.zip" "make it drum.vst3" "make it drum.clap" "make it drum.component"
           else
             zip -r "../../make-it-drum-${{ matrix.name }}.zip" "make it drum.vst3" "make it drum.clap"
           fi

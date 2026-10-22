@@ -2,13 +2,13 @@
 
 > un projet de [Masao « Saiya Geez »](https://beacons.ai/saiyageez) · plugin par yrbane
 
-Un instrument **VST3 / CLAP** qui joue, depuis le MIDI, les kits de 20 percussions
+Un instrument **VST3 / CLAP / Audio Unit** qui joue, depuis le MIDI, les kits de 20 percussions
 fabriqués sur la page [make it drum](https://yrbane.github.io/makeItDrum/)
 ([dépôt](https://github.com/yrbane/makeItDrum)). Le son est strictement celui de la
 page : ce sont les mêmes fichiers WAV. Le plugin ne génère rien, il joue.
 
-- **Version** : 0.1.0 — voir [CHANGELOG.md](CHANGELOG.md)
-- **Télécharger** : [releases](https://github.com/yrbane/makeItDrum-plugin/releases) (Linux, Windows, macOS)
+- **Version** : 0.2.0 — voir [CHANGELOG.md](CHANGELOG.md)
+- **Télécharger** : [releases](https://github.com/yrbane/makeItDrum-plugin/releases) — Linux (VST3, CLAP), Windows (VST3, CLAP), macOS universel (VST3, CLAP, AU)
 
 ## Utilisation
 
@@ -38,8 +38,23 @@ qui peut renommer les pads et changer leurs notes, ou un dossier de WAV.
 - **Linux** : `make it drum.vst3` → `~/.vst3/`, `make it drum.clap` → `~/.clap/`.
 - **Windows** (y compris Live sous Wine) : `make it drum.vst3` → `C:\Program Files\Common Files\VST3\`,
   `make it drum.clap` → `C:\Program Files\Common Files\CLAP\`.
-- **macOS** : `make it drum.vst3` → `~/Library/Audio/Plug-Ins/VST3/`, `.clap` → `~/Library/Audio/Plug-Ins/CLAP/`.
-  Le bundle n'est pas signé : clic droit → Ouvrir, ou `xattr -dr com.apple.quarantine`.
+- **macOS** : `make it drum.vst3` → `~/Library/Audio/Plug-Ins/VST3/`, `.clap` → `~/Library/Audio/Plug-Ins/CLAP/`,
+  `make it drum.component` → `~/Library/Audio/Plug-Ins/Components/` (Logic Pro, GarageBand, MainStage ;
+  relancer la DAW, ou `killall -9 AudioComponentRegistrar` si l'instrument n'apparaît pas).
+  Les bundles sont signés ad hoc, pas notarisés : après le téléchargement, `xattr -dr com.apple.quarantine`
+  sur chacun, ou clic droit → Ouvrir.
+
+### DAW couverts
+
+| Format | Fichier | DAW |
+|---|---|---|
+| VST3 | `make it drum.vst3` | Ableton Live, Cubase / Nuendo, Studio One, FL Studio, Reaper, Bitwig, Ardour, Waveform, Renoise, Mixcraft… |
+| CLAP | `make it drum.clap` | Bitwig, Reaper, FL Studio, Ardour, Waveform, Renoise, Mixcraft… |
+| AU (macOS) | `make it drum.component` | Logic Pro, GarageBand, MainStage, plus toute DAW macOS qui charge des AU |
+
+Pas d'AAX : Pro Tools demande le SDK Avid et une signature PACE, hors de portée d'un projet libre.
+L'AU est produit par [clap-wrapper](https://github.com/free-audio/clap-wrapper) autour du CLAP et
+validé par `auval` en CI ; il n'a pas encore été ouvert dans Logic par un humain, retours bienvenus.
 
 ## Développement
 
@@ -48,6 +63,7 @@ cargo test --workspace                                   # 43 tests, dont un gol
 cargo clippy --workspace --all-targets -- -D warnings
 cargo xtask bundle make-it-drum --release         # → target/bundled/
 cargo xtask bundle make-it-drum --release --target x86_64-pc-windows-gnu   # cross via mingw
+cmake -S au -B au/build -DCMAKE_BUILD_TYPE=Release && cmake --build au/build   # AU (macOS, après bundle-universal)
 cargo run --release --features standalone --bin make-it-drum -- --backend dummy   # fenêtre sans DAW
 cargo run -p make-it-drum-core --example inspect -- ~/Documents/makeitdrum/kits/x.zip   # décrit un kit
 ```
@@ -65,6 +81,7 @@ Structure :
 - `crates/core` — cœur pur, sans hôte : `wav` (décodage), `kit` (pack web, `kit.json`, dossier, mapping note → pad), `voice` (one-shot interpolé), `engine` (20 voix, mixage). Tests dans `crates/core/tests/`, golden dans `tests/golden/`.
 - `crates/plugin` — nih-plug : `slot` (partage GUI / fond / audio sans blocage), `loader` (état persistant, dossier des kits), `params`, `editor` (egui), `lib` (le `Plugin`).
 - `xtask` — bundler nih-plug.
+- `au` — gabarit CMake de l'Audio Unit (clap-wrapper, CLAP embarqué).
 
 Contraintes : thread audio sans allocation (`assert_process_allocs` en debug) ni verrou bloquant ; TDD ; commits en français.
 

@@ -4,3 +4,5 @@ target/
 .remember/
 .superpowers/
 .claude/
+*.component/
+au/build/
