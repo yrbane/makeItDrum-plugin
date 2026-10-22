@@ -23,3 +23,12 @@ dirs = { workspace = true }
 hound = { workspace = true }
 zip = { workspace = true }
 serde_json = { workspace = true }
+
+[features]
+# binaire autonome (JACK / CPAL / dummy) pour tester sans DAW et capturer l'interface
+standalone = ["nih_plug/standalone"]
+
+[[bin]]
+name = "make-it-drum"
+path = "src/main.rs"
+required-features = ["standalone"]

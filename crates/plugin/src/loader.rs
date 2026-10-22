@@ -79,6 +79,11 @@ pub fn scan_kits(dir: &Path) -> Vec<PathBuf> {
     kits
 }
 
+/// Le premier kit du dossier, pour démarrer avec un son prêt à jouer.
+pub fn first_kit(dir: &Path) -> Option<PathBuf> {
+    scan_kits(dir).into_iter().next()
+}
+
 /// Nom affiché d'un fichier de kit : sans `.kit.zip` ni `.zip`.
 pub fn display_name(path: &Path) -> String {
     let base = path

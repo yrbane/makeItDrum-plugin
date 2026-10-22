@@ -20,7 +20,7 @@ use nih_plug::prelude::*;
 use make_it_drum_core::engine::Engine;
 use make_it_drum_core::kit::PAD_COUNT;
 
-use loader::{load_from_path, load_from_state};
+use loader::{first_kit, kits_dir, load_from_path, load_from_state};
 use params::KitPlayerParams;
 use slot::KitSlot;
 
@@ -89,9 +89,20 @@ impl Plugin for KitPlayer {
                         .map(|s| s.clone())
                         .unwrap_or_default();
                     if state.path.is_none() && state.zip_base64.is_none() {
-                        return;
+                        // instance neuve : le premier kit du dossier, s'il y en a un
+                        match first_kit(&kits_dir()) {
+                            Some(path) => load_from_path(&path),
+                            None => {
+                                slot.set_status(format!(
+                                    "Déposez un kit (.zip) dans {}",
+                                    kits_dir().display()
+                                ));
+                                return;
+                            }
+                        }
+                    } else {
+                        load_from_state(&state)
                     }
-                    load_from_state(&state)
                 }
             };
             match result {

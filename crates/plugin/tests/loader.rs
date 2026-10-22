@@ -126,3 +126,14 @@ fn kits_dir_honours_the_environment_override() {
     std::env::remove_var("MAKEITDRUM_KITS");
     assert!(kits_dir().ends_with("makeitdrum/kits"));
 }
+
+#[test]
+fn first_kit_is_the_first_zip_of_the_folder_or_none() {
+    use make_it_drum::loader::first_kit;
+    let d = tmp();
+    assert_eq!(first_kit(&d), None);
+    std::fs::write(d.join("b.zip"), b"x").unwrap();
+    std::fs::write(d.join("a.zip"), b"x").unwrap();
+    assert_eq!(first_kit(&d), Some(d.join("a.zip")));
+    std::fs::remove_dir_all(&d).unwrap();
+}
