@@ -16,6 +16,21 @@ pub const PAD_COUNT: usize = 20;
 /// Note GM du premier pad (C1, kick).
 pub const BASE_NOTE: u8 = 36;
 
+/// Les 20 recettes de la page make it drum, dans l'ordre d'export du pack.
+pub const FLAVORS: [&str; PAD_COUNT] = [
+    "BOOM", "KICK", "THUD", "SNAP", "CRACK", "BUZZ", "RING", "TICK", "GLASS", "WASH", "BEND",
+    "SWELL", "STUTTER", "CRUSH", "PHASE", "GROWL", "PERC", "BELL", "DARK", "CHAOS",
+];
+
+/// `makeitdrum_NN` (NN de 01 à 20) → nom de la recette ; sinon le nom tel quel.
+fn label_for(stem: &str) -> String {
+    stem.strip_prefix("makeitdrum_")
+        .and_then(|n| n.parse::<usize>().ok())
+        .filter(|n| (1..=PAD_COUNT).contains(n))
+        .map(|n| FLAVORS[n - 1].to_string())
+        .unwrap_or_else(|| stem.to_string())
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum KitError {
     Zip(String),
@@ -145,7 +160,7 @@ impl Kit {
             let wav = read_entry(&mut archive, entry)?;
             pads.push(Pad {
                 index,
-                label: stem(entry),
+                label: label_for(&stem(entry)),
                 note: BASE_NOTE + index as u8,
                 sample: decode_wav(&wav)?,
             });
@@ -176,7 +191,9 @@ impl Kit {
         let mut pads = Vec::new();
         for (index, file) in files.iter().take(PAD_COUNT).enumerate() {
             let bytes = std::fs::read(file).map_err(|e| KitError::Io(e.to_string()))?;
-            let label = stem(&file.file_name().unwrap_or_default().to_string_lossy());
+            let label = label_for(&stem(
+                &file.file_name().unwrap_or_default().to_string_lossy(),
+            ));
             pads.push(Pad {
                 index,
                 label,

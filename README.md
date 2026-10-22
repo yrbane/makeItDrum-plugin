@@ -16,8 +16,9 @@ page : ce sont les mêmes fichiers WAV. Le plugin ne génère rien, il joue.
    `makeitdrum_pack.zip`.
 2. Déposez ce fichier dans `~/Documents/makeitdrum/kits/` (ou dans le dossier donné
    par la variable `MAKEITDRUM_KITS`).
-3. Dans votre DAW, ajoutez l'instrument **make it drum**, choisissez le kit dans la
-   selectbox (ou collez un chemin, ou déposez le `.zip` sur la fenêtre).
+3. Dans votre DAW, ajoutez l'instrument **make it drum** : une instance neuve charge
+   le premier kit du dossier. Changez de kit dans la selectbox (ou collez un chemin,
+   ou déposez le `.zip` sur la fenêtre).
 4. Jouez : pad 1 = note 36 (C1), pad 2 = 37, … pad 20 = 55. Un clic sur un pad le
    déclenche aussi. Le kit est embarqué dans le preset : le projet se rouvre sans le
    fichier.
@@ -25,6 +26,8 @@ page : ce sont les mêmes fichiers WAV. Le plugin ne génère rien, il joue.
 | Recette | BOOM | KICK | THUD | SNAP | CRACK | BUZZ | RING | TICK | GLASS | WASH | BEND | SWELL | STUTTER | CRUSH | PHASE | GROWL | PERC | BELL | DARK | CHAOS |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | Note | 36 | 37 | 38 | 39 | 40 | 41 | 42 | 43 | 44 | 45 | 46 | 47 | 48 | 49 | 50 | 51 | 52 | 53 | 54 | 55 |
+
+Les pads du pack de la page prennent les noms des recettes (BOOM, KICK, …).
 
 Formats de kit acceptés : le pack de la page (20 WAV, sans manifeste), un `.kit.zip`
 avec un `kit.json` (schéma v1, cf. [la spec](docs/superpowers/specs/2026-10-22-kit-player-design.md))
@@ -45,7 +48,17 @@ cargo test --workspace                                   # 43 tests, dont un gol
 cargo clippy --workspace --all-targets -- -D warnings
 cargo xtask bundle make-it-drum --release         # → target/bundled/
 cargo xtask bundle make-it-drum --release --target x86_64-pc-windows-gnu   # cross via mingw
+cargo run --release --features standalone --bin make-it-drum -- --backend dummy   # fenêtre sans DAW
+cargo run -p make-it-drum-core --example inspect -- ~/Documents/makeitdrum/kits/x.zip   # décrit un kit
 ```
+
+Le binaire autonome (`--features standalone`) ouvre l'interface avec JACK, CPAL ou
+sans audio (`--backend dummy`) : pratique pour tester un kit ou capturer l'écran.
+
+Limite connue : avec clap-validator 0.4.1, les tests `state-reproducibility-*`
+échouent sur ce plugin **comme sur l'exemple `gain` de nih-plug** (désaccord entre
+nih-plug master et le validateur sur les paramètres) ; les autres tests passent et
+les hôtes rechargent l'état correctement.
 
 Structure :
 

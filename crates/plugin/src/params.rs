@@ -34,7 +34,7 @@ impl Default for KitPlayerParams {
             .with_unit(" dB")
             .with_value_to_string(formatters::v2s_f32_gain_to_db(2))
             .with_string_to_value(formatters::s2v_f32_gain_to_db()),
-            editor_state: EguiState::from_size(600, 460),
+            editor_state: EguiState::from_size(600, 430),
             kit_state: Arc::new(RwLock::new(KitState::default())),
         }
     }

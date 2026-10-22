@@ -6,7 +6,10 @@ fn web_pack_without_manifest_maps_20_pads_to_gm_notes() {
     let kit = Kit::from_zip_bytes("makeitdrum_pack", &common::web_pack(44100)).unwrap();
     assert_eq!(kit.name, "makeitdrum_pack");
     assert_eq!(kit.pads.len(), PAD_COUNT);
-    assert_eq!(kit.pads[0].label, "makeitdrum_01");
+    assert_eq!(
+        kit.pads[0].label, "BOOM",
+        "pack web reconnu : nom de la recette"
+    );
     assert_eq!(kit.pads[0].note, BASE_NOTE);
     assert_eq!(kit.pads[19].note, BASE_NOTE + 19);
     assert_eq!(kit.pads[19].index, 19);
@@ -128,4 +131,21 @@ fn from_path_loads_a_directory_of_wavs_and_a_zip_file() {
         Err(KitError::Io(_))
     ));
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn web_pack_pads_get_the_recipe_names_of_the_page() {
+    let kit = Kit::from_zip_bytes("makeitdrum_pack", &common::web_pack(44100)).unwrap();
+    let labels: Vec<&str> = kit.pads.iter().map(|p| p.label.as_str()).collect();
+    assert_eq!(&labels[..4], &["BOOM", "KICK", "THUD", "SNAP"]);
+    assert_eq!(labels[19], "CHAOS");
+}
+
+#[test]
+fn other_wav_names_keep_their_file_stem() {
+    let w = common::sine_wav(100.0, 10, 44100, 1, 16);
+    let zip = common::zip_store(&[("makeitdrum_01.wav", &w), ("snare.wav", &w)]);
+    let kit = Kit::from_zip_bytes("x", &zip).unwrap();
+    assert_eq!(kit.pads[0].label, "BOOM", "numéro reconnu");
+    assert_eq!(kit.pads[1].label, "snare");
 }

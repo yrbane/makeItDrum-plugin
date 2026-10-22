@@ -67,7 +67,7 @@ pub fn create(
                 });
                 ui.horizontal(|ui| {
                     ui.label("un projet de");
-                    ui.hyperlink_to("🥁 Masao « Saiya Geez » ↗", CREDIT_URL);
+                    ui.hyperlink_to("Masao « Saiya Geez » ↗", CREDIT_URL);
                     ui.label("·");
                     ui.hyperlink_to("code ↗", PROJECT_URL);
                 });
@@ -156,7 +156,7 @@ pub fn create(
                         });
                         let button = egui::Button::new(text)
                             .fill(if lit { PAD_LIT } else { PAD_IDLE })
-                            .min_size(egui::vec2(pad_w, 52.0));
+                            .min_size(egui::vec2(pad_w, 58.0));
                         if ui.add_enabled(labels.len() > i, button).clicked() {
                             slot.request_trigger(i);
                         }
