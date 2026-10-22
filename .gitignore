@@ -1,0 +1,6 @@
+target/
+*.vst3/
+*.clap
+.remember/
+.superpowers/
+.claude/

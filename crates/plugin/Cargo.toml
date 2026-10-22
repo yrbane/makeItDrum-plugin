@@ -1,0 +1,21 @@
+[package]
+name = "make-it-drum-plugin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "make it drum — lecteur de kits VST3/CLAP (nih-plug)"
+
+[lib]
+name = "make_it_drum"
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+make-it-drum-core = { workspace = true }
+nih_plug = { workspace = true }
+nih_plug_egui = { workspace = true }
+serde = { workspace = true }
+base64 = { workspace = true }
+dirs = { workspace = true }

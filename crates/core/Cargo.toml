@@ -1,0 +1,18 @@
+[package]
+name = "make-it-drum-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Cœur pur du lecteur de kits make it drum : format de kit, mapping MIDI, voix et mixage"
+
+[lib]
+name = "make_it_drum_core"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+hound = { workspace = true }
+zip = { workspace = true }
