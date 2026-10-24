@@ -118,7 +118,7 @@ pub fn waveform_columns(sample: &Sample, columns: usize) -> Vec<(f32, f32)> {
         .collect()
 }
 
-struct EditorState {
+pub struct EditorState {
     kits: Vec<PathBuf>,
     path_input: String,
     save_name: String,
@@ -136,8 +136,14 @@ struct EditorState {
     show_path: bool,
 }
 
+impl Default for EditorState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EditorState {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             kits: scan_kits(&kits_dir()),
             path_input: String::new(),
@@ -155,6 +161,11 @@ impl EditorState {
         }
     }
 
+    /// Sélectionne un pad (panneau de droite).
+    pub fn select(&mut self, pad: Option<usize>) {
+        self.selected = pad.filter(|p| *p < PAD_COUNT);
+    }
+
     fn refresh_waves(&mut self, kit: Option<&Kit>, generation: u64) {
         if self.waves_generation == generation {
             return;
@@ -170,28 +181,27 @@ impl EditorState {
     }
 }
 
-fn style(ctx: &egui::Context) {
+pub fn style(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::light();
     visuals.panel_fill = PANEL;
     visuals.window_fill = PANEL_LIGHT;
     visuals.extreme_bg_color = egui::Color32::WHITE;
     visuals.faint_bg_color = PANEL_LIGHT;
-    visuals.override_text_color = Some(INK);
     visuals.hyperlink_color = XP_BLUE_DARK;
     visuals.selection.bg_fill = XP_BLUE_MID;
     visuals.selection.stroke = egui::Stroke::new(1.0_f32, egui::Color32::WHITE);
     visuals.widgets.noninteractive.bg_fill = PANEL;
     visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, PANEL_BORDER);
     visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0_f32, INK);
-    visuals.widgets.inactive.bg_fill = PANEL_LIGHT;
+    visuals.widgets.inactive.bg_fill = PANEL_DARK;
     visuals.widgets.inactive.weak_bg_fill = PANEL_LIGHT;
     visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0_f32, PANEL_BORDER);
     visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0_f32, INK);
-    visuals.widgets.hovered.bg_fill = egui::Color32::WHITE;
+    visuals.widgets.hovered.bg_fill = PANEL_BORDER;
     visuals.widgets.hovered.weak_bg_fill = egui::Color32::WHITE;
     visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0_f32, XP_BLUE_MID);
     visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.5_f32, INK);
-    visuals.widgets.active.bg_fill = PANEL_DARK;
+    visuals.widgets.active.bg_fill = XP_BLUE_MID;
     visuals.widgets.active.weak_bg_fill = PANEL_DARK;
     visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0_f32, XP_BLUE_DARK);
     visuals.widgets.active.fg_stroke = egui::Stroke::new(1.5_f32, INK);
@@ -209,6 +219,7 @@ fn style(ctx: &egui::Context) {
     style.spacing.item_spacing = egui::vec2(6.0, 5.0);
     style.spacing.button_padding = egui::vec2(8.0, 3.0);
     style.spacing.slider_width = 110.0;
+    style.spacing.slider_rail_height = 6.0;
     style.text_styles.insert(
         egui::TextStyle::Heading,
         egui::FontId::new(19.0, egui::FontFamily::Proportional),
@@ -301,6 +312,19 @@ fn draw_pad(ui: &mut egui::Ui, look: PadLook) -> egui::Response {
         egui::Stroke::new(1.0_f32, PAD_EDGE),
         egui::StrokeKind::Inside,
     );
+    painter.rect_filled(
+        egui::Rect::from_min_max(
+            rect.min + egui::vec2(1.0, 1.0),
+            egui::pos2(rect.max.x - 1.0, rect.min.y + rect.height() * 0.45),
+        ),
+        egui::CornerRadius {
+            nw: 5,
+            ne: 5,
+            sw: 0,
+            se: 0,
+        },
+        egui::Color32::from_white_alpha(22),
+    );
     painter.line_segment(
         [
             egui::pos2(rect.left() + 6.0, rect.top() + 1.0),
@@ -361,7 +385,7 @@ fn draw_pad(ui: &mut egui::Ui, look: PadLook) -> egui::Response {
             badges.push_str(&format!("×{}", p.variant_count()));
         }
         if p.settings.reverse {
-            badges.push('◀');
+            badges.push('⏴');
         }
         if !badges.is_empty() {
             painter.text(
@@ -434,6 +458,36 @@ pub fn create(
         EditorState::new(),
         |ctx, _| style(ctx),
         move |ctx, setter, state| {
+            draw(
+                ctx,
+                setter,
+                state,
+                &params,
+                &slot,
+                &history,
+                &recorder,
+                &|task| async_executor.execute_background(task),
+            );
+        },
+    )
+}
+
+/// Une image de l'interface. `run` reçoit les tâches à exécuter hors du
+/// thread audio ; séparé de `create` pour pouvoir dessiner sans hôte
+/// (`examples/snapshot.rs`).
+#[allow(clippy::too_many_arguments)]
+pub fn draw(
+    ctx: &egui::Context,
+    setter: &ParamSetter,
+    state: &mut EditorState,
+    params: &KitPlayerParams,
+    slot: &KitSlot,
+    history: &History,
+    recorder: &Recorder,
+    run: &dyn Fn(Task),
+) {
+    {
+        {
             // fichiers survolés / déposés sur la fenêtre, et position du curseur
             let (hovering_audio, dropped, pointer, pointer_down) = ctx.input(|i| {
                 let hovering_audio = i.raw.hovered_files.iter().any(|f| {
@@ -473,6 +527,20 @@ pub fn create(
                         .inner_margin(egui::Margin::symmetric(12, 6)),
                 )
                 .show(ctx, |ui| {
+                    let bar = ui.max_rect().expand2(egui::vec2(12.0, 6.0));
+                    let top = egui::Rect::from_min_max(
+                        bar.min,
+                        egui::pos2(bar.max.x, bar.min.y + bar.height() * 0.5),
+                    );
+                    ui.painter()
+                        .rect_filled(top, 0.0_f32, XP_BLUE_MID.gamma_multiply(0.35));
+                    ui.painter().line_segment(
+                        [
+                            egui::pos2(bar.min.x, bar.max.y - 0.5),
+                            egui::pos2(bar.max.x, bar.max.y - 0.5),
+                        ],
+                        egui::Stroke::new(1.0_f32, XP_BLUE_MID),
+                    );
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new("make it drum")
@@ -490,10 +558,19 @@ pub fn create(
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.visuals_mut().hyperlink_color = egui::Color32::WHITE;
-                            ui.hyperlink_to(egui::RichText::new("code ↗").small(), PROJECT_URL);
+                            ui.hyperlink_to(
+                                egui::RichText::new("code ↗")
+                                    .small()
+                                    .color(egui::Color32::WHITE)
+                                    .underline(),
+                                PROJECT_URL,
+                            );
                             ui.label(egui::RichText::new("·").small().color(egui::Color32::WHITE));
                             ui.hyperlink_to(
-                                egui::RichText::new("Masao « Saiya Geez » ↗").small(),
+                                egui::RichText::new("Masao « Saiya Geez » ↗")
+                                    .small()
+                                    .color(egui::Color32::WHITE)
+                                    .underline(),
                                 CREDIT_URL,
                             );
                             ui.label(
@@ -548,8 +625,7 @@ pub fn create(
                                 for p in &state.kits {
                                     let name = display_name(p);
                                     if ui.selectable_label(name == kit_name, &name).clicked() {
-                                        async_executor
-                                            .execute_background(Task::LoadPath(p.clone()));
+                                        run(Task::LoadPath(p.clone()));
                                     }
                                 }
                             });
@@ -569,11 +645,11 @@ pub fn create(
                         }
                         ui.separator();
                         if ui
-                            .add_enabled(!history.is_empty(), egui::Button::new("↶ Annuler"))
+                            .add_enabled(!history.is_empty(), egui::Button::new("⟲ Annuler"))
                             .on_hover_text("Revenir au kit précédent")
                             .clicked()
                         {
-                            async_executor.execute_background(Task::Undo);
+                            run(Task::Undo);
                         }
                         ui.separator();
                         ui.add(
@@ -587,19 +663,18 @@ pub fn create(
                             .on_hover_text(format!("En .kit.zip dans {}", kits_dir().display()))
                             .clicked()
                         {
-                            async_executor
-                                .execute_background(Task::SaveKit(state.save_name.trim().into()));
+                            run(Task::SaveKit(state.save_name.trim().into()));
                             state.kits = scan_kits(&kits_dir());
                         }
                         ui.add_enabled_ui(can_save, |ui| {
-                            ui.menu_button("Exporter ▾", |ui| {
+                            ui.menu_button("Exporter ⏷", |ui| {
                                 ui.label(
                                     egui::RichText::new(format!("vers {}", exports_dir().display()))
                                         .small()
                                         .weak(),
                                 );
                                 if ui.button("Dossier de WAV (un par pad)").clicked() {
-                                    async_executor.execute_background(Task::ExportWavs(
+                                    run(Task::ExportWavs(
                                         state.save_name.trim().into(),
                                     ));
                                     ui.close_menu();
@@ -609,7 +684,7 @@ pub fn create(
                                     .on_hover_text("À glisser sur une piste MIDI de Live")
                                     .clicked()
                                 {
-                                    async_executor.execute_background(Task::ExportDrumRack(
+                                    run(Task::ExportDrumRack(
                                         state.save_name.trim().into(),
                                     ));
                                     ui.close_menu();
@@ -626,7 +701,7 @@ pub fn create(
                                     .hint_text("…/makeitdrum_pack.zip ou dossier de WAV"),
                             );
                             if ui.button("Charger").clicked() && !state.path_input.trim().is_empty() {
-                                async_executor.execute_background(Task::LoadPath(PathBuf::from(
+                                run(Task::LoadPath(PathBuf::from(
                                     state.path_input.trim(),
                                 )));
                             }
@@ -680,7 +755,7 @@ pub fn create(
                                     } else {
                                         let button = egui::Button::new(
                                             egui::RichText::new(format!(
-                                                "● Capturer {:.0} s",
+                                                "⏺ Capturer {:.1} s",
                                                 state.capture_seconds
                                             ))
                                             .color(egui::Color32::WHITE),
@@ -706,7 +781,7 @@ pub fn create(
                             });
                         });
                     if recorder.is_done() {
-                        async_executor.execute_background(Task::Capture);
+                        run(Task::Capture);
                     }
                     ui.add_space(4.0);
 
@@ -737,7 +812,7 @@ pub fn create(
                             .on_hover_text("Rejoue chaque recette avec une nouvelle graine (sauf pads verrouillés)")
                             .clicked()
                         {
-                            async_executor.execute_background(Task::Regenerate(None));
+                            run(Task::Regenerate(None));
                         }
                         ui.separator();
                         ui.label("Frappes")
@@ -819,7 +894,7 @@ pub fn create(
                                         }
                                         if response.secondary_clicked() && has_source {
                                             state.selected = Some(i);
-                                            async_executor.execute_background(Task::Regenerate(Some(i)));
+                                            run(Task::Regenerate(Some(i)));
                                         }
                                         if pointer.is_some_and(|p| response.rect.contains(p)) {
                                             target = Some(i);
@@ -854,8 +929,8 @@ pub fn create(
                                 pad_panel(
                                     ui,
                                     state,
-                                    &slot,
-                                    &async_executor,
+                                    slot,
+                                    run,
                                     current_kit.as_deref(),
                                     has_source,
                                 );
@@ -868,7 +943,7 @@ pub fn create(
             // ---- réglages du pad en attente : envoyés quand le curseur est relâché
             if !pointer_down {
                 if let Some((pad, settings)) = state.editing.take() {
-                    async_executor.execute_background(Task::SetSettings { pad, settings });
+                    run(Task::SetSettings { pad, settings });
                 }
             }
 
@@ -879,7 +954,7 @@ pub fn create(
             } else if !pointer_down && state.shaping_sent != Some(shaping) {
                 state.shaping_sent = Some(shaping);
                 if has_source {
-                    async_executor.execute_background(Task::Reshape);
+                    run(Task::Reshape);
                 }
             }
             let rr = params.round_robin.value().max(1) as usize;
@@ -888,7 +963,7 @@ pub fn create(
             } else if !pointer_down && state.round_robin_sent != Some(rr) {
                 state.round_robin_sent = Some(rr);
                 if has_source {
-                    async_executor.execute_background(Task::SetRoundRobin(rr));
+                    run(Task::SetRoundRobin(rr));
                 }
             }
 
@@ -896,12 +971,12 @@ pub fn create(
             if let Some(path) = dropped {
                 nih_log!("dépôt : {} (pad visé : {target:?})", path.display());
                 match classify_drop(&path, target) {
-                    Drop::Kit(p) => async_executor.execute_background(Task::LoadPath(p)),
+                    Drop::Kit(p) => run(Task::LoadPath(p)),
                     Drop::Sample { path, pad } => {
                         state.selected = Some(pad);
-                        async_executor.execute_background(Task::DropSample { pad, path })
+                        run(Task::DropSample { pad, path })
                     }
-                    Drop::Generate(p) => async_executor.execute_background(Task::Generate(p)),
+                    Drop::Generate(p) => run(Task::Generate(p)),
                     Drop::Unsupported(p) => {
                         let name = p.file_name().unwrap_or_default().to_string_lossy();
                         nih_log!("dépôt refusé, format non pris en charge : {name}");
@@ -910,15 +985,15 @@ pub fn create(
                 }
             }
             ctx.request_repaint_after(Duration::from_millis(40));
-        },
-    )
+        }
+    }
 }
 
 fn pad_panel(
     ui: &mut egui::Ui,
     state: &mut EditorState,
     slot: &KitSlot,
-    async_executor: &AsyncExecutor<KitPlayer>,
+    run: &dyn Fn(Task),
     kit: Option<&Kit>,
     has_source: bool,
 ) {
@@ -975,7 +1050,7 @@ fn pad_panel(
         && name.trim() != pad.label
         && !name.trim().is_empty()
     {
-        async_executor.execute_background(Task::RenamePad {
+        run(Task::RenamePad {
             pad: i,
             label: name.trim().to_string(),
         });
@@ -983,7 +1058,7 @@ fn pad_panel(
 
     // forme d'onde
     let (rect, _) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), 54.0), egui::Sense::hover());
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 44.0), egui::Sense::hover());
     let wave = waveform_columns(&pad.sample, 110);
     draw_lcd(ui.painter(), rect, &wave, slot.playing() & (1 << i) != 0);
     let secs = pad.sample.frames() as f32 / pad.sample.sample_rate.max(1) as f32;
@@ -1004,9 +1079,9 @@ fn pad_panel(
         .small()
         .color(INK_SOFT),
     );
-    ui.add_space(2.0);
-
     // réglages
+    ui.spacing_mut().slider_width = (ui.available_width() - 120.0).max(80.0);
+    ui.spacing_mut().item_spacing.y = 3.0;
     let mut s = match state.editing {
         Some((p, s)) if p == i => s,
         _ => pad.settings,
@@ -1069,7 +1144,7 @@ fn pad_panel(
     }
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        if ui.button("▶ Jouer").clicked() {
+        if ui.button("⏵ Jouer").clicked() {
             slot.request_trigger(i);
         }
         if ui
@@ -1080,7 +1155,7 @@ fn pad_panel(
             .on_hover_text("Nouvelle graine pour ce pad")
             .clicked()
         {
-            async_executor.execute_background(Task::Regenerate(Some(i)));
+            run(Task::Regenerate(Some(i)));
         }
         if ui
             .add_enabled(

@@ -2,7 +2,7 @@
 
 ## 0.4.0 — 2026-10-24 · « Jouable, réglable, exportable »
 
-- **Interface refaite**, dans l'esprit de la page : barre de titre bleue, panneau beige, pads à écran LCD vert qui montrent la forme d'onde du son, le nom et la note (C1…G2), glow vert à la frappe, cadre bleu sur le pad sélectionné. Fenêtre 820 × 530.
+- **Interface refaite**, dans l'esprit de la page : barre de titre bleue, panneau beige, pads à écran LCD vert qui montrent la forme d'onde du son, le nom et la note (C1…G2), glow vert à la frappe, cadre bleu sur le pad sélectionné. Fenêtre 820 × 540. Liens du bandeau en blanc souligné, rails de curseurs visibles, reflets sur la barre de titre et les pads.
 - **Réglages par pad** (panneau de droite, pad sélectionné au clic) : nom, gain (−24 à +12 dB), hauteur (±24 demi-tons), panoramique, chute (avec fondu), lecture inversée, **groupe d'étouffement** (1 à 4 : les pads d'un même groupe se coupent, fondu de 256 trames), **verrou**. La **vélocité MIDI** est prise en compte. Tout est écrit dans `kit.json` (`settings`, absent par défaut) et dans le preset.
 - **Frappes** (1 à 4) : variantes de frappe par pad générées avec des graines dérivées, jouées à tour de rôle ; stockées dans le `.kit.zip` (`alternates`).
 - **Mode mélodique** : un pad choisi joué sur tout le clavier, transposé autour du do médian.
@@ -11,7 +11,7 @@
 - **Capture audio** : entrée auxiliaire « Capture » (sidechain), bouton ● Capturer (0,5 à 8 s), tampon alloué d'avance et `try_lock` côté audio ; le kit se fabrique depuis l'enregistrement.
 - **Rendu parallèle** des 20 pads (génération et cadrage) sur tous les cœurs, déterministe par graine.
 - Verrouillés exclus des variations, du cadrage et des frappes. Un son déposé sur un pad efface ses variantes.
-- `examples/render.rs` : les 20 pads d'un son en WAV, hors DAW, avec cadrage et graine.
+- `examples/render.rs` (cœur) : les 20 pads d'un son en WAV, hors DAW, avec cadrage et graine. `examples/snapshot.rs` (plugin) : image PNG de l'interface sans hôte, rasterisée en logiciel, pour juger le design depuis le terminal.
 - 102 tests.
 
 ## 0.3.0 — 2026-10-23 · « Un son devient un kit, dans la DAW »

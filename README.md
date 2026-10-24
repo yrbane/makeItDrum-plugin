@@ -121,6 +121,7 @@ cmake -S au -B au/build -DCMAKE_BUILD_TYPE=Release && cmake --build au/build   #
 cargo run --release --features standalone --bin make-it-drum -- --backend dummy   # fenêtre sans DAW
 cargo run -p make-it-drum-core --example inspect -- ~/Documents/makeitdrum/kits/x.zip   # décrit un kit
 cargo run --release -p make-it-drum-core --example render -- son.wav out/ 0.7 0.5 0      # les 20 pads en WAV, hors DAW
+cargo run --release -p make-it-drum --example snapshot -- ui.png son.wav 2            # image de l'interface, sans hôte
 ```
 
 Le binaire autonome (`--features standalone`) ouvre l'interface avec JACK, CPAL ou
