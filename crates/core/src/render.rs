@@ -28,10 +28,20 @@ pub struct SourceSample {
 impl SourceSample {
     /// Mélange en mono (moyenne des canaux), inverse, analyse.
     pub fn prepare(sample: &Sample) -> Self {
+        Self::prepare_from(sample, 0.0)
+    }
+
+    /// Comme `prepare`, en ne gardant que le son à partir de `start`
+    /// (fraction de sa durée, 0 à 1) ; jamais moins de 32 trames.
+    pub fn prepare_from(sample: &Sample, start: f64) -> Self {
         let ch = sample.channels.max(1) as usize;
+        let frames = sample.frames();
+        let skip =
+            ((clamp(start, 0.0, 1.0) * frames as f64) as usize).min(frames.saturating_sub(32));
         let data: Vec<f32> = sample
             .data
             .chunks(ch)
+            .skip(skip)
             .map(|frame| frame.iter().sum::<f32>() / ch as f32)
             .collect();
         let reversed: Vec<f32> = data.iter().rev().copied().collect();
@@ -171,6 +181,8 @@ pub struct PadPlan {
 pub struct Shaping {
     pub fidelity: f64,
     pub length: f64,
+    /// Point de départ dans le son source, fraction de sa durée (0 à 1).
+    pub start: f64,
 }
 
 impl Default for Shaping {
@@ -178,6 +190,7 @@ impl Default for Shaping {
         Self {
             fidelity: 0.0,
             length: 0.0,
+            start: 0.0,
         }
     }
 }
@@ -187,11 +200,19 @@ impl Shaping {
         Self {
             fidelity: clamp(fidelity, 0.0, 1.0),
             length: clamp(length, 0.0, 1.0),
+            start: 0.0,
+        }
+    }
+
+    pub fn with_start(self, start: f64) -> Self {
+        Self {
+            start: clamp(start, 0.0, 1.0),
+            ..self
         }
     }
 
     pub fn is_default(&self) -> bool {
-        self.fidelity == 0.0 && self.length == 0.0
+        self.fidelity == 0.0 && self.length == 0.0 && self.start == 0.0
     }
 }
 

@@ -417,3 +417,27 @@ fn shaping_is_clamped_to_the_unit_range() {
     assert!(Shaping::default().is_default());
     assert!(!Shaping::new(0.1, 0.0).is_default());
 }
+
+#[test]
+fn start_skips_the_beginning_of_the_source_and_keeps_at_least_32_frames() {
+    use make_it_drum_core::wav::Sample;
+    let sample = Sample {
+        data: (0..1000).map(|i| i as f32).collect(),
+        channels: 1,
+        sample_rate: 1000,
+    };
+    let whole = SourceSample::prepare_from(&sample, 0.0);
+    assert_eq!(whole.data.len(), 1000);
+    let half = SourceSample::prepare_from(&sample, 0.5);
+    assert_eq!(half.data.len(), 500);
+    assert_eq!(half.data[0], 500.0);
+    assert_eq!(half.reversed[0], 999.0);
+    let end = SourceSample::prepare_from(&sample, 1.0);
+    assert_eq!(end.data.len(), 32);
+    assert_eq!(SourceSample::prepare_from(&sample, 0.3).duration(), 0.7);
+    let s = Shaping::new(0.2, 0.3).with_start(0.4);
+    assert_eq!(s.start, 0.4);
+    assert!(!s.is_default());
+    assert!(Shaping::default().with_start(0.0).is_default());
+    assert_eq!(Shaping::default().with_start(7.0).start, 1.0);
+}

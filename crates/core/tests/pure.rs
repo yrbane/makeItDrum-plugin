@@ -149,3 +149,26 @@ fn shaper_and_automation_lookups_interpolate_and_clamp() {
         "après la fin : dernière valeur"
     );
 }
+
+#[test]
+fn onset_finds_the_strongest_rise_and_backs_off_one_window() {
+    use make_it_drum_core::analysis::onset;
+    let sr = 10_000u32;
+    // 0,3 s de silence, un petit bruit, puis une attaque franche à 0,5 s
+    let mut data = vec![0.0f32; sr as usize];
+    for (i, v) in data.iter_mut().enumerate().skip(3000).take(2000) {
+        *v = 0.05 * ((i as f32) * 0.3).sin();
+    }
+    for (i, v) in data.iter_mut().enumerate().skip(5000) {
+        *v = 0.9 * ((i as f32) * 0.5).sin() * (1.0 - (i - 5000) as f32 / 5000.0);
+    }
+    let at = onset(&data, sr);
+    assert_eq!(at, 4900, "une fenêtre de 10 ms avant l'attaque");
+    assert_eq!(onset(&[], sr), 0);
+    assert_eq!(
+        onset(&vec![0.2f32; 2000], sr),
+        0,
+        "son plat : pas de montée"
+    );
+    assert_eq!(onset(&data[..50], sr), 0, "trop court");
+}

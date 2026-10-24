@@ -1,5 +1,5 @@
 mod common;
-use make_it_drum_core::kit::{Kit, KitError, BASE_NOTE, PAD_COUNT};
+use make_it_drum_core::kit::{Kit, KitError, Pad, BASE_NOTE, PAD_COUNT};
 
 #[test]
 fn web_pack_without_manifest_maps_20_pads_to_gm_notes() {
@@ -243,14 +243,20 @@ fn generate_makes_20_pads_from_one_sound_with_seeds_and_keeps_the_source() {
     let seeds: Vec<u32> = (0..20).map(|i| 1000 + i).collect();
     let mut seen = Vec::new();
     let kit = Kit::generate("porte", &sound, Some(&seeds), |k, i| {
-        seen.push((k.pads.len(), i))
+        assert_eq!(k.pads.len(), PAD_COUNT, "la grille est pleine dès le début");
+        assert!(!k.pads[i].is_empty(), "le pad livré est rendu");
+        seen.push(i)
     })
     .unwrap();
     assert_eq!(kit.name, "porte");
     assert_eq!(kit.pads.len(), PAD_COUNT);
     assert_eq!(seen.len(), PAD_COUNT, "un appel de progression par pad");
-    assert_eq!(seen[0], (1, 0));
-    assert_eq!(seen[19], (20, 19));
+    seen.sort();
+    assert_eq!(
+        seen,
+        (0..PAD_COUNT).collect::<Vec<_>>(),
+        "chaque pad une fois"
+    );
     assert!(kit.has_source());
     assert_eq!(kit.source.as_ref().unwrap().sample_rate, 22050);
     let labels: Vec<&str> = kit.pads.iter().map(|p| p.label.as_str()).collect();
@@ -374,4 +380,184 @@ fn reshape_rerenders_seeded_pads_only_and_travels_in_the_kit_zip() {
     let mut json = String::new();
     std::io::Read::read_to_string(&mut archive.by_name("kit.json").unwrap(), &mut json).unwrap();
     assert!(!json.contains("shaping"));
+}
+
+// ---- réglages par pad, variantes de frappe, verrou, renommage
+
+#[test]
+fn pad_settings_are_clamped_and_travel_in_the_kit_zip_only_when_set() {
+    use make_it_drum_core::kit::PadSettings;
+    let mut kit = Kit::from_zip_bytes("pack", &common::web_pack(44100)).unwrap();
+    assert!(kit.pads.iter().all(|p| p.settings.is_default()));
+    kit.set_settings(
+        2,
+        PadSettings {
+            gain_db: -40.0,
+            pitch: 30.0,
+            pan: 2.0,
+            decay: 0.0,
+            reverse: true,
+            choke: 9,
+            locked: true,
+        },
+    )
+    .unwrap();
+    let s = kit.pads[2].settings;
+    assert_eq!(s.gain_db, -24.0);
+    assert_eq!(s.pitch, 24.0);
+    assert_eq!(s.pan, 1.0);
+    assert_eq!(s.decay, 0.05);
+    assert_eq!(s.choke, PadSettings::MAX_CHOKE);
+    assert!(s.reverse && s.locked);
+    assert!(kit.set_settings(PAD_COUNT, PadSettings::default()).is_err());
+    kit.rename_pad(2, "  caisse  ").unwrap();
+    assert_eq!(kit.pads[2].label, "caisse");
+
+    let zip = kit.to_kit_zip().unwrap();
+    let back = Kit::from_zip_bytes("x", &zip).unwrap();
+    assert_eq!(back.pads[2].settings, s);
+    assert_eq!(back.pads[2].label, "caisse");
+    assert!(back.pads[3].settings.is_default());
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip)).unwrap();
+    let mut json = String::new();
+    std::io::Read::read_to_string(&mut archive.by_name("kit.json").unwrap(), &mut json).unwrap();
+    assert_eq!(
+        json.matches("\"settings\"").count(),
+        1,
+        "seul le pad réglé porte des réglages"
+    );
+    assert!(json.contains("\"gainDb\": -24.0"));
+}
+
+#[test]
+fn round_robin_renders_alternates_for_seeded_unlocked_pads_and_persists_them() {
+    use make_it_drum_core::kit::{PadSettings, MAX_ROUND_ROBIN};
+    let wav = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/source.wav"
+    ))
+    .unwrap();
+    let sound = make_it_drum_core::wav::decode_wav(&wav).unwrap();
+    let seeds: Vec<u32> = (0..20).map(|i| 900 + i).collect();
+    let mut kit = Kit::generate("k", &sound, Some(&seeds), |_, _| {}).unwrap();
+    assert_eq!(kit.round_robin(), 1);
+    let dropped =
+        make_it_drum_core::wav::decode_wav(&common::sine_wav(300.0, 400, 22050, 1, 16)).unwrap();
+    kit.set_pad(4, "main", dropped).unwrap();
+    kit.set_settings(
+        6,
+        PadSettings {
+            locked: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let mut seen = Vec::new();
+    kit.set_round_robin(3, |_, i| seen.push(i)).unwrap();
+    assert_eq!(seen.len(), 18, "20 pads moins le déposé et le verrouillé");
+    assert_eq!(kit.round_robin(), 3);
+    assert_eq!(kit.pads[0].alternates.len(), 2);
+    assert_eq!(kit.pads[4].alternates.len(), 0);
+    assert_eq!(kit.pads[6].alternates.len(), 0);
+    assert_eq!(kit.pads[0].alternates[0].0, Pad::alternate_seed(900, 1));
+    assert_ne!(kit.pads[0].alternates[0].1, kit.pads[0].sample);
+    assert_ne!(kit.pads[0].alternates[0].1, kit.pads[0].alternates[1].1);
+    assert_eq!(kit.pads[0].sample_at(1), &kit.pads[0].alternates[0].1);
+    assert_eq!(kit.pads[0].sample_at(3), &kit.pads[0].sample, "modulo");
+
+    // déjà au bon compte : rien à refaire ; réduire retire ; au-delà du max, borné
+    let mut seen = Vec::new();
+    kit.set_round_robin(3, |_, i| seen.push(i)).unwrap();
+    assert!(seen.is_empty());
+    let back = Kit::from_zip_bytes("x", &kit.to_kit_zip().unwrap()).unwrap();
+    assert_eq!(back.pads[0].alternates, kit.pads[0].alternates);
+    assert_eq!(back.round_robin(), 3);
+    kit.set_round_robin(99, |_, _| {}).unwrap();
+    assert_eq!(kit.round_robin(), MAX_ROUND_ROBIN);
+    kit.set_round_robin(1, |_, _| {}).unwrap();
+    assert_eq!(kit.round_robin(), 1);
+
+    // sans source : impossible d'en demander, mais 1 passe
+    let mut plain = Kit::from_zip_bytes("pack", &common::web_pack(44100)).unwrap();
+    assert_eq!(plain.set_round_robin(2, |_, _| {}), Err(KitError::NoSource));
+    assert!(plain.set_round_robin(1, |_, _| {}).is_ok());
+}
+
+#[test]
+fn locked_pads_survive_reshape_and_variations_and_alternates_follow_their_pad() {
+    use make_it_drum_core::kit::PadSettings;
+    use make_it_drum_core::render::Shaping;
+    let wav = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/source.wav"
+    ))
+    .unwrap();
+    let sound = make_it_drum_core::wav::decode_wav(&wav).unwrap();
+    let seeds: Vec<u32> = (0..20).map(|i| 300 + i).collect();
+    let mut kit = Kit::generate("k", &sound, Some(&seeds), |_, _| {}).unwrap();
+    kit.set_round_robin(2, |_, _| {}).unwrap();
+    kit.set_settings(
+        1,
+        PadSettings {
+            locked: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let before = kit.clone();
+    kit.reshape(Shaping::new(1.0, 0.0), |_, _| {}).unwrap();
+    assert_eq!(kit.pads[1], before.pads[1], "verrouillé : intact");
+    assert_ne!(kit.pads[0].sample, before.pads[0].sample);
+    assert_ne!(
+        kit.pads[0].alternates[0].1, before.pads[0].alternates[0].1,
+        "variante rejouée"
+    );
+    assert_eq!(
+        kit.pads[0].alternates[0].0, before.pads[0].alternates[0].0,
+        "même graine"
+    );
+
+    // nouvelle graine explicite : les variantes suivent la nouvelle graine
+    kit.regenerate_pad(0, Some(4242)).unwrap();
+    assert_eq!(kit.pads[0].alternates[0].0, Pad::alternate_seed(4242, 1));
+    // un son déposé sur un pad efface ses variantes
+    let dropped =
+        make_it_drum_core::wav::decode_wav(&common::sine_wav(300.0, 400, 22050, 1, 16)).unwrap();
+    kit.set_pad(0, "main", dropped).unwrap();
+    assert!(kit.pads[0].alternates.is_empty());
+}
+
+#[test]
+fn start_moves_the_source_window_keeps_the_whole_source_and_travels_in_the_zip() {
+    use make_it_drum_core::render::Shaping;
+    let wav = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/source.wav"
+    ))
+    .unwrap();
+    let sound = make_it_drum_core::wav::decode_wav(&wav).unwrap();
+    let seeds: Vec<u32> = (0..20).map(|i| 100 + i).collect();
+    let plain = Kit::generate("k", &sound, Some(&seeds), |_, _| {}).unwrap();
+    let late = Kit::generate_with(
+        "k",
+        &sound,
+        Some(&seeds),
+        Shaping::default().with_start(0.5),
+        |_, _| {},
+    )
+    .unwrap();
+    assert_eq!(late.source, plain.source, "le son entier reste dans le kit");
+    assert_ne!(late.pads[0].sample, plain.pads[0].sample);
+    let onset = plain.source_onset().unwrap();
+    assert!((0.0..1.0).contains(&onset));
+    assert_eq!(Kit::empty("x").source_onset(), None);
+
+    let back = Kit::from_zip_bytes("x", &late.to_kit_zip().unwrap()).unwrap();
+    assert_eq!(back.shaping.start, 0.5);
+    let mut moved = plain.clone();
+    moved
+        .reshape(Shaping::default().with_start(0.5), |_, _| {})
+        .unwrap();
+    assert_eq!(moved.pads[0].sample, late.pads[0].sample);
 }

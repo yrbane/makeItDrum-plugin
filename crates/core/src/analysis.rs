@@ -76,6 +76,32 @@ fn peak_bin(mag: &[f64], lo_hz: f64, hi_hz: f64, freq_res: f64, half: usize) -> 
 
 /// Analyse un signal mono. Fenêtre de Hann sur les `N` premiers échantillons,
 /// `N` puissance de deux entre 1024 et 16384.
+/// Position (en trames) du transitoire le plus fort : la fenêtre de 10 ms
+/// dont l'énergie monte le plus par rapport à la précédente. 0 si le son
+/// est vide ou plat.
+pub fn onset(data: &[f32], sample_rate: u32) -> usize {
+    let win = ((sample_rate as f64 * 0.01) as usize).max(16);
+    if data.len() < 2 * win {
+        return 0;
+    }
+    let rms: Vec<f64> = data
+        .chunks(win)
+        .map(|c| (c.iter().map(|v| (*v as f64).powi(2)).sum::<f64>() / c.len() as f64).sqrt())
+        .collect();
+    let mut best = (0usize, 0.0f64);
+    for i in 1..rms.len() {
+        let rise = rms[i] - rms[i - 1];
+        if rise > best.1 {
+            best = (i, rise);
+        }
+    }
+    if best.1 <= 1e-6 {
+        return 0;
+    }
+    // on recule d'une fenêtre pour ne pas couper l'attaque
+    best.0.saturating_sub(1) * win
+}
+
 pub fn analyze(data: &[f32], sample_rate: u32) -> Analysis {
     let mut n = 1024usize;
     while n * 2 <= data.len() && n < 16384 {

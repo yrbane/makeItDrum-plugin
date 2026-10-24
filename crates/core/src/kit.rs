@@ -62,6 +62,80 @@ impl fmt::Display for KitError {
 
 impl std::error::Error for KitError {}
 
+/// Réglages de lecture d'un pad, appliqués par le moteur à chaque frappe.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PadSettings {
+    /// Gain en dB (−24 à +12).
+    pub gain_db: f32,
+    /// Transposition en demi-tons (−24 à +24).
+    pub pitch: f32,
+    /// Panoramique, −1 (gauche) à +1 (droite) ; 0 = sans atténuation.
+    pub pan: f32,
+    /// Part du son jouée, 0,05 à 1 ; en dessous de 1, fondu de sortie.
+    pub decay: f32,
+    /// Lecture à l'envers.
+    pub reverse: bool,
+    /// Groupe d'étouffement, 0 = aucun : une frappe coupe les autres pads du groupe.
+    pub choke: u8,
+    /// Verrouillé : variations, cadrage et variantes de frappe le laissent tel quel.
+    pub locked: bool,
+}
+
+impl Default for PadSettings {
+    fn default() -> Self {
+        Self {
+            gain_db: 0.0,
+            pitch: 0.0,
+            pan: 0.0,
+            decay: 1.0,
+            reverse: false,
+            choke: 0,
+            locked: false,
+        }
+    }
+}
+
+impl PadSettings {
+    pub const MAX_CHOKE: u8 = 4;
+
+    /// Ramène chaque réglage dans sa plage.
+    pub fn clamped(self) -> Self {
+        Self {
+            gain_db: self.gain_db.clamp(-24.0, 12.0),
+            pitch: self.pitch.clamp(-24.0, 24.0),
+            pan: self.pan.clamp(-1.0, 1.0),
+            decay: if self.decay.is_finite() {
+                self.decay.clamp(0.05, 1.0)
+            } else {
+                1.0
+            },
+            reverse: self.reverse,
+            choke: self.choke.min(Self::MAX_CHOKE),
+            locked: self.locked,
+        }
+    }
+
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Facteur de gain linéaire.
+    pub fn gain(&self) -> f32 {
+        10f32.powf(self.gain_db / 20.0)
+    }
+
+    /// Multiplicateur de vitesse de lecture pour la transposition.
+    pub fn rate(&self) -> f64 {
+        2f64.powf(self.pitch as f64 / 12.0)
+    }
+
+    /// Gains (gauche, droite) du panoramique : au centre, 1 et 1.
+    pub fn pan_gains(&self) -> (f32, f32) {
+        ((1.0 - self.pan).min(1.0), (1.0 + self.pan).min(1.0))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pad {
     pub index: usize,
@@ -70,6 +144,10 @@ pub struct Pad {
     pub sample: Sample,
     /// Graine du rendu, si le pad a été généré à partir du son source.
     pub seed: Option<u32>,
+    /// Réglages de lecture.
+    pub settings: PadSettings,
+    /// Variantes de frappe (graine, son) jouées à tour de rôle avec `sample`.
+    pub alternates: Vec<(u32, Sample)>,
 }
 
 impl Pad {
@@ -81,7 +159,28 @@ impl Pad {
             note: BASE_NOTE.saturating_add(index as u8),
             sample: Sample::silent(),
             seed: None,
+            settings: PadSettings::default(),
+            alternates: Vec::new(),
         }
+    }
+
+    /// Nombre de sons jouables à tour de rôle : le principal plus les variantes.
+    pub fn variant_count(&self) -> usize {
+        1 + self.alternates.len()
+    }
+
+    /// Le son `k` (0 = principal, puis les variantes) ; au-delà, modulo.
+    pub fn sample_at(&self, k: usize) -> &Sample {
+        let n = self.variant_count();
+        match k % n {
+            0 => &self.sample,
+            i => &self.alternates[i - 1].1,
+        }
+    }
+
+    /// Graine de la variante `k` (1 et plus), dérivée de la graine du pad.
+    pub fn alternate_seed(seed: u32, k: usize) -> u32 {
+        seed.wrapping_add(0x9E37_79B9u32.wrapping_mul(k as u32))
     }
 
     /// `true` si le pad n'a aucun son.
@@ -103,6 +202,51 @@ pub struct Kit {
 /// Nom d'entrée du son source dans un `.kit.zip` écrit par le plugin.
 pub const SOURCE_FILE: &str = "source.wav";
 
+/// Nombre maximal de sons à tour de rôle par pad.
+pub const MAX_ROUND_ROBIN: usize = 4;
+
+/// Rend `jobs` (pad, graine) sur tous les cœurs, et livre chaque son à `done`
+/// sur le thread appelant, dans l'ordre d'achèvement. Les rendus sont
+/// déterministes par graine : l'ordre ne change pas le résultat.
+fn render_parallel(
+    jobs: &[(usize, u32)],
+    src: &SourceSample,
+    shaping: &Shaping,
+    mut done: impl FnMut(usize, u32, Sample),
+) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc;
+    if jobs.is_empty() {
+        return;
+    }
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .clamp(1, jobs.len());
+    let next = AtomicUsize::new(0);
+    let (tx, rx) = mpsc::channel();
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            let tx = tx.clone();
+            let next = &next;
+            scope.spawn(move || loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                let Some(&(index, seed)) = jobs.get(i) else {
+                    break;
+                };
+                let sample = render_pad_with(flavor_at(index), src, seed, shaping);
+                if tx.send((index, seed, sample)).is_err() {
+                    break;
+                }
+            });
+        }
+        drop(tx);
+        for (index, seed, sample) in rx.iter().take(jobs.len()) {
+            done(index, seed, sample);
+        }
+    });
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Manifest {
@@ -121,6 +265,8 @@ struct Manifest {
 struct ManifestShaping {
     fidelity: f64,
     length: f64,
+    #[serde(default)]
+    start: f64,
 }
 
 /// Le son source : les métadonnées de la page, plus `file` quand le plugin
@@ -140,6 +286,18 @@ struct ManifestPad {
     flavor: Option<String>,
     note: Option<u8>,
     seed: Option<u32>,
+    file: String,
+    /// Réglages de lecture (plugin) ; absents quand ils sont par défaut.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    settings: Option<PadSettings>,
+    /// Variantes de frappe (plugin).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    alternates: Vec<ManifestAlternate>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ManifestAlternate {
+    seed: u32,
     file: String,
 }
 
@@ -217,12 +375,19 @@ impl Kit {
                     KitError::MissingFile(_) => KitError::MissingFile(p.file.clone()),
                     other => other,
                 })?;
+                let mut alternates = Vec::with_capacity(p.alternates.len());
+                for alt in &p.alternates {
+                    let bytes = read_entry(&mut archive, &format!("{prefix}{}", alt.file))?;
+                    alternates.push((alt.seed, decode_wav(&bytes)?));
+                }
                 pads.push(Pad {
                     index: p.index,
                     label: p.flavor.unwrap_or_else(|| stem(&p.file)),
                     note: p.note.unwrap_or(BASE_NOTE.saturating_add(p.index as u8)),
                     sample: decode_wav(&wav)?,
                     seed: p.seed,
+                    settings: p.settings.unwrap_or_default().clamped(),
+                    alternates,
                 });
             }
             let source = match manifest.source.and_then(|s| s.file) {
@@ -234,7 +399,7 @@ impl Kit {
             };
             let shaping = manifest
                 .shaping
-                .map(|s| Shaping::new(s.fidelity, s.length))
+                .map(|s| Shaping::new(s.fidelity, s.length).with_start(s.start))
                 .unwrap_or_default();
             return Ok(Kit {
                 name: manifest.name.unwrap_or_else(|| name.to_string()),
@@ -254,6 +419,8 @@ impl Kit {
                 note: BASE_NOTE + index as u8,
                 sample: decode_wav(&wav)?,
                 seed: None,
+                settings: PadSettings::default(),
+                alternates: Vec::new(),
             });
         }
         if pads.is_empty() {
@@ -293,6 +460,8 @@ impl Kit {
                 note: BASE_NOTE + index as u8,
                 sample: decode_wav(&bytes)?,
                 seed: None,
+                settings: PadSettings::default(),
+                alternates: Vec::new(),
             });
         }
         if pads.is_empty() {
@@ -360,26 +529,34 @@ impl Kit {
         if source.frames() == 0 {
             return Err(KitError::Empty);
         }
-        let src = SourceSample::prepare(source);
+        let src = SourceSample::prepare_from(source, shaping.start);
         let mut kit = Kit {
             name: name.to_string(),
-            pads: Vec::with_capacity(PAD_COUNT),
-            source: Some(src.to_sample()),
+            pads: (0..PAD_COUNT).map(Pad::empty).collect(),
+            // le son entier, pour pouvoir déplacer le départ ensuite
+            source: Some(SourceSample::prepare(source).to_sample()),
             shaping,
         };
-        for (index, flavor) in RECIPES.iter().enumerate() {
-            let seed = seeds
-                .and_then(|s| s.get(index).copied())
-                .unwrap_or_else(fresh_seed);
-            kit.pads.push(Pad {
+        let jobs: Vec<(usize, u32)> = (0..PAD_COUNT)
+            .map(|index| {
+                let seed = seeds
+                    .and_then(|s| s.get(index).copied())
+                    .unwrap_or_else(fresh_seed);
+                (index, seed)
+            })
+            .collect();
+        render_parallel(&jobs, &src, &shaping, |index, seed, sample| {
+            kit.pads[index] = Pad {
                 index,
-                label: flavor.name.to_string(),
+                label: RECIPES[index].name.to_string(),
                 note: BASE_NOTE + index as u8,
-                sample: render_pad_with(flavor, &src, seed, &shaping),
+                sample,
                 seed: Some(seed),
-            });
+                settings: PadSettings::default(),
+                alternates: Vec::new(),
+            };
             progress(&kit, index);
-        }
+        });
         Ok(kit)
     }
 
@@ -390,19 +567,91 @@ impl Kit {
         if index >= PAD_COUNT {
             return Err(KitError::Manifest(format!("pad {index} hors de la grille")));
         }
-        let src = SourceSample::prepare(source);
+        let src = SourceSample::prepare_from(source, self.shaping.start);
         let seed = seed.unwrap_or_else(fresh_seed);
         let flavor = flavor_at(index);
         let sample = render_pad_with(flavor, &src, seed, &self.shaping);
         while self.pads.len() <= index {
             self.pads.push(Pad::empty(self.pads.len()));
         }
+        let shaping = self.shaping;
         let pad = &mut self.pads[index];
         if pad.is_empty() {
             pad.label = flavor.name.to_string();
         }
         pad.sample = sample;
         pad.seed = Some(seed);
+        for (k, alt) in pad.alternates.iter_mut().enumerate() {
+            alt.0 = Pad::alternate_seed(seed, k + 1);
+            alt.1 = render_pad_with(flavor, &src, alt.0, &shaping);
+        }
+        Ok(())
+    }
+
+    /// Donne à chaque pad généré (et non verrouillé) `count` sons à tour de
+    /// rôle : le principal plus `count − 1` variantes, rendues avec des
+    /// graines dérivées de la sienne. `count` = 1 retire les variantes.
+    /// `progress` est appelé après chaque pad traité.
+    pub fn set_round_robin(
+        &mut self,
+        count: usize,
+        mut progress: impl FnMut(&Kit, usize),
+    ) -> Result<(), KitError> {
+        let count = count.clamp(1, MAX_ROUND_ROBIN);
+        let src = match &self.source {
+            Some(s) => Some(SourceSample::prepare_from(s, self.shaping.start)),
+            None if count > 1 => return Err(KitError::NoSource),
+            None => None,
+        };
+        let shaping = self.shaping;
+        for index in 0..self.pads.len() {
+            let pad = &self.pads[index];
+            let Some(seed) = pad.seed else { continue };
+            if pad.settings.locked {
+                continue;
+            }
+            let wanted = count - 1;
+            if pad.alternates.len() == wanted {
+                continue;
+            }
+            let flavor = flavor_at(index);
+            let mut alternates = std::mem::take(&mut self.pads[index].alternates);
+            alternates.truncate(wanted);
+            if let Some(src) = &src {
+                while alternates.len() < wanted {
+                    let k = alternates.len() + 1;
+                    let alt_seed = Pad::alternate_seed(seed, k);
+                    alternates.push((alt_seed, render_pad_with(flavor, src, alt_seed, &shaping)));
+                }
+            }
+            self.pads[index].alternates = alternates;
+            progress(self, index);
+        }
+        Ok(())
+    }
+
+    /// Nombre de sons à tour de rôle du kit : le maximum sur les pads.
+    pub fn round_robin(&self) -> usize {
+        self.pads.iter().map(Pad::variant_count).max().unwrap_or(1)
+    }
+
+    /// Change les réglages de lecture du pad `index`.
+    pub fn set_settings(&mut self, index: usize, settings: PadSettings) -> Result<(), KitError> {
+        let pad = self
+            .pads
+            .get_mut(index)
+            .ok_or_else(|| KitError::Manifest(format!("pad {index} hors de la grille")))?;
+        pad.settings = settings.clamped();
+        Ok(())
+    }
+
+    /// Renomme le pad `index`.
+    pub fn rename_pad(&mut self, index: usize, label: &str) -> Result<(), KitError> {
+        let pad = self
+            .pads
+            .get_mut(index)
+            .ok_or_else(|| KitError::Manifest(format!("pad {index} hors de la grille")))?;
+        pad.label = label.trim().to_string();
         Ok(())
     }
 
@@ -416,16 +665,44 @@ impl Kit {
         mut progress: impl FnMut(&Kit, usize),
     ) -> Result<(), KitError> {
         let source = self.source.as_ref().ok_or(KitError::NoSource)?;
-        let src = SourceSample::prepare(source);
+        let src = SourceSample::prepare_from(source, shaping.start);
         self.shaping = shaping;
-        for index in 0..self.pads.len() {
-            let Some(seed) = self.pads[index].seed else {
+        // un travail par son à rejouer : (pad, graine), le principal puis ses variantes
+        let mut jobs: Vec<(usize, u32)> = Vec::new();
+        for (index, pad) in self.pads.iter().enumerate() {
+            let Some(seed) = pad.seed else { continue };
+            if pad.settings.locked {
                 continue;
-            };
-            self.pads[index].sample = render_pad_with(flavor_at(index), &src, seed, &shaping);
-            progress(self, index);
+            }
+            jobs.push((index, seed));
+            jobs.extend(pad.alternates.iter().map(|(s, _)| (index, *s)));
         }
+        let mut remaining: Vec<usize> = self.pads.iter().map(|p| p.variant_count()).collect();
+        render_parallel(&jobs, &src, &shaping, |index, seed, sample| {
+            let pad = &mut self.pads[index];
+            if pad.seed == Some(seed) {
+                pad.sample = sample;
+            } else if let Some(alt) = pad.alternates.iter_mut().find(|a| a.0 == seed) {
+                alt.1 = sample;
+            }
+            remaining[index] -= 1;
+            if remaining[index] == 0 {
+                progress(self, index);
+            }
+        });
         Ok(())
+    }
+
+    /// Position du transitoire le plus fort du son source, en fraction de sa
+    /// durée ; `None` sans source.
+    pub fn source_onset(&self) -> Option<f64> {
+        let src = self.source.as_ref()?;
+        let frames = src.frames();
+        if frames == 0 {
+            return None;
+        }
+        let mono = SourceSample::prepare(src);
+        Some(crate::analysis::onset(&mono.data, src.sample_rate) as f64 / frames as f64)
     }
 
     /// `true` si le kit peut être régénéré (il garde son son source).
@@ -450,6 +727,7 @@ impl Kit {
         pad.label = label.to_string();
         pad.sample = sample;
         pad.seed = None;
+        pad.alternates.clear();
         Ok(())
     }
 
@@ -474,31 +752,30 @@ impl Kit {
             .large_file(true);
         let mut manifest_pads = Vec::new();
         for pad in self.pads.iter().filter(|p| !p.is_empty()) {
-            let file = format!("{:02}_{}.wav", pad.index + 1, safe_stem(&pad.label));
-            let spec = hound::WavSpec {
-                channels: pad.sample.channels,
-                sample_rate: pad.sample.sample_rate,
-                bits_per_sample: 32,
-                sample_format: hound::SampleFormat::Float,
-            };
-            let mut wav = Cursor::new(Vec::new());
-            {
-                let mut w = hound::WavWriter::new(&mut wav, spec)
-                    .map_err(|e| KitError::Wav(e.to_string()))?;
-                for v in &pad.sample.data {
-                    w.write_sample(*v)
-                        .map_err(|e| KitError::Wav(e.to_string()))?;
-                }
-                w.finalize().map_err(|e| KitError::Wav(e.to_string()))?;
-            }
+            let stem = format!("{:02}_{}", pad.index + 1, safe_stem(&pad.label));
+            let file = format!("{stem}.wav");
             writer.start_file(&file, opts).map_err(zip_err)?;
-            writer.write_all(&wav.into_inner()).map_err(io_err)?;
+            writer
+                .write_all(&encode_wav(&pad.sample)?)
+                .map_err(io_err)?;
+            let mut alternates = Vec::with_capacity(pad.alternates.len());
+            for (k, (seed, sample)) in pad.alternates.iter().enumerate() {
+                let alt_file = format!("{stem}_v{}.wav", k + 2);
+                writer.start_file(&alt_file, opts).map_err(zip_err)?;
+                writer.write_all(&encode_wav(sample)?).map_err(io_err)?;
+                alternates.push(ManifestAlternate {
+                    seed: *seed,
+                    file: alt_file,
+                });
+            }
             manifest_pads.push(ManifestPad {
                 index: pad.index,
                 flavor: Some(pad.label.clone()),
                 note: Some(pad.note),
                 seed: pad.seed,
                 file,
+                settings: (!pad.settings.is_default()).then_some(pad.settings),
+                alternates,
             });
         }
         let source = match &self.source {
@@ -522,6 +799,7 @@ impl Kit {
             shaping: (!self.shaping.is_default()).then_some(ManifestShaping {
                 fidelity: self.shaping.fidelity,
                 length: self.shaping.length,
+                start: self.shaping.start,
             }),
             pads: manifest_pads,
         };
