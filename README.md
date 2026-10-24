@@ -39,7 +39,7 @@ Les pads du pack de la page prennent les noms des recettes (BOOM, KICK, …).
 
 Pour démarrer, `extras/rythmes/rythmes.py` écrit sept clips MIDI de 4 mesures sur ce
 mapping (quatre au plancher, boom bap, breakbeat, half-time, polyrythme, chaos…) :
-`python3 extras/rythmes/rythmes.py "~/Music/Ableton/User Library/make it drum/rythmes"`,
+`python3 extras/rythmes/rythmes.py "<User Library de Live>/Clips/make it drum"`,
 puis glissez un `.mid` depuis le navigateur de la DAW sur la piste du plugin.
 
 ### Le même moteur que la page, en Rust
