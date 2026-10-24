@@ -4,9 +4,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use base64::Engine as _;
-use make_it_drum_core::kit::{Kit, KitError};
+use make_it_drum_core::kit::{Kit, KitError, PadSettings};
 use make_it_drum_core::render::Shaping;
 use make_it_drum_core::wav::decode_audio;
+use make_it_drum_core::wav::Sample;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -71,6 +72,66 @@ pub fn generate_from_path(
     let kit = Kit::generate_with(&name, &sample, None, shaping, progress)?;
     let state = state_for(&kit)?;
     Ok((Arc::new(kit), state))
+}
+
+/// Fabrique un kit de 20 percussions à partir d'un son déjà décodé (capture).
+pub fn generate_from_sample(
+    name: &str,
+    sample: &Sample,
+    shaping: Shaping,
+    progress: impl FnMut(&Kit, usize),
+) -> Result<(Arc<Kit>, KitState), KitError> {
+    let kit = Kit::generate_with(name, sample, None, shaping, progress)?;
+    let state = state_for(&kit)?;
+    Ok((Arc::new(kit), state))
+}
+
+/// Change les réglages de lecture d'un pad du kit courant.
+pub fn set_settings(
+    current: &Kit,
+    pad: usize,
+    settings: PadSettings,
+) -> Result<(Arc<Kit>, KitState), KitError> {
+    let mut kit = current.clone();
+    kit.set_settings(pad, settings)?;
+    let state = state_for(&kit)?;
+    Ok((Arc::new(kit), state))
+}
+
+/// Renomme un pad du kit courant.
+pub fn rename_pad(
+    current: &Kit,
+    pad: usize,
+    label: &str,
+) -> Result<(Arc<Kit>, KitState), KitError> {
+    let mut kit = current.clone();
+    kit.rename_pad(pad, label)?;
+    let state = state_for(&kit)?;
+    Ok((Arc::new(kit), state))
+}
+
+/// Donne `count` sons à tour de rôle à chaque pad généré du kit courant.
+pub fn set_round_robin(
+    current: &Kit,
+    count: usize,
+    progress: impl FnMut(&Kit, usize),
+) -> Result<(Arc<Kit>, KitState), KitError> {
+    let mut kit = current.clone();
+    kit.set_round_robin(count, progress)?;
+    let state = state_for(&kit)?;
+    Ok((Arc::new(kit), state))
+}
+
+/// Dossier des exports : `MAKEITDRUM_EXPORTS` sinon `~/Documents/makeitdrum/exports`.
+pub fn exports_dir() -> PathBuf {
+    if let Some(p) = std::env::var_os("MAKEITDRUM_EXPORTS") {
+        return PathBuf::from(p);
+    }
+    dirs::document_dir()
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("makeitdrum")
+        .join("exports")
 }
 
 /// Rejoue les pads générés du kit courant avec leurs graines et le cadrage

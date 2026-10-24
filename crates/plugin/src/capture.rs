@@ -75,14 +75,14 @@ impl Recorder {
 
     /// Ajoute un bloc (thread audio) : moyenne des canaux, sans allocation,
     /// sans blocage. Rien n'est écrit si le verrou n'est pas libre.
-    pub fn push(&self, channels: &[&[f32]]) {
+    pub fn push<T: AsRef<[f32]>>(&self, channels: &[T]) {
         if self.state.load(Ordering::Acquire) != RECORDING || channels.is_empty() {
             return;
         }
         let wanted = self.wanted.load(Ordering::Acquire);
         let mut written = self.written.load(Ordering::Acquire);
         if let Ok(mut b) = self.buffer.try_lock() {
-            let n = channels[0].len();
+            let n = channels[0].as_ref().len();
             let inv = 1.0 / channels.len() as f32;
             for i in 0..n {
                 if written >= wanted || b.len() >= b.capacity() {
@@ -90,7 +90,7 @@ impl Recorder {
                 }
                 let mut v = 0.0;
                 for ch in channels {
-                    v += ch.get(i).copied().unwrap_or(0.0);
+                    v += ch.as_ref().get(i).copied().unwrap_or(0.0);
                 }
                 b.push(v * inv);
                 written += 1;

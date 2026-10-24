@@ -21,6 +21,7 @@ pub struct KitSlot {
     status: Mutex<String>,
     pending_triggers: AtomicU32,
     playing: AtomicU32,
+    sample_rate: AtomicU32,
 }
 
 impl KitSlot {
@@ -98,5 +99,14 @@ impl KitSlot {
 
     pub fn playing(&self) -> u32 {
         self.playing.load(Ordering::Acquire)
+    }
+
+    /// Fréquence d'échantillonnage de l'hôte (0 tant qu'elle est inconnue).
+    pub fn set_sample_rate(&self, rate: f32) {
+        self.sample_rate.store(rate as u32, Ordering::Release);
+    }
+
+    pub fn sample_rate(&self) -> f32 {
+        self.sample_rate.load(Ordering::Acquire) as f32
     }
 }

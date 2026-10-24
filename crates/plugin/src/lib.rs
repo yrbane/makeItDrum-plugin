@@ -23,10 +23,13 @@ use nih_plug::prelude::*;
 use make_it_drum_core::engine::Engine;
 use make_it_drum_core::kit::PAD_COUNT;
 
+use capture::Recorder;
+use history::History;
 use loader::{
-    first_kit, generate_from_path, kits_dir, load_from_path, load_from_state, regenerate,
-    replace_pad, reshape,
+    exports_dir, first_kit, generate_from_path, generate_from_sample, kits_dir, load_from_path,
+    load_from_state, regenerate, rename_pad, replace_pad, reshape, set_round_robin, set_settings,
 };
+use make_it_drum_core::kit::PadSettings;
 use params::KitPlayerParams;
 use slot::KitSlot;
 
@@ -42,6 +45,22 @@ pub enum Task {
     Regenerate(Option<usize>),
     /// Rejouer les pads générés avec leurs graines et les réglages Fidélité / Durée courants (GUI).
     Reshape,
+    /// Changer les réglages de lecture d'un pad (GUI).
+    SetSettings { pad: usize, settings: PadSettings },
+    /// Renommer un pad (GUI).
+    RenamePad { pad: usize, label: String },
+    /// Donner `n` sons à tour de rôle à chaque pad généré (GUI).
+    SetRoundRobin(usize),
+    /// Revenir au kit précédent (GUI).
+    Undo,
+    /// Enregistrer le kit dans le dossier des kits sous ce nom (GUI).
+    SaveKit(String),
+    /// Exporter un WAV par pad dans le dossier des exports (GUI).
+    ExportWavs(String),
+    /// Exporter un Drum Rack de Live (.adg + WAV) dans le dossier des exports (GUI).
+    ExportDrumRack(String),
+    /// Fabriquer un kit à partir de la capture audio terminée (GUI).
+    Capture,
     /// Recharger le kit décrit par l'état persistant (ouverture de projet).
     Restore,
 }
@@ -49,6 +68,8 @@ pub enum Task {
 pub struct KitPlayer {
     params: Arc<KitPlayerParams>,
     slot: Arc<KitSlot>,
+    history: Arc<History>,
+    recorder: Arc<Recorder>,
     engine: Engine,
     seen_generation: u64,
     loaded_fingerprint: String,
@@ -59,6 +80,8 @@ impl Default for KitPlayer {
         Self {
             params: Arc::new(KitPlayerParams::default()),
             slot: Arc::new(KitSlot::new()),
+            history: Arc::new(History::new()),
+            recorder: Arc::new(Recorder::new()),
             engine: Engine::new(44100.0),
             seen_generation: 0,
             loaded_fingerprint: String::new(),
@@ -73,12 +96,19 @@ impl Plugin for KitPlayer {
     const EMAIL: &'static str = "";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
+    // une entrée auxiliaire (sidechain) : la source de la capture audio
     const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[AudioIOLayout {
         main_input_channels: None,
         main_output_channels: NonZeroU32::new(2),
-        aux_input_ports: &[],
+        aux_input_ports: &[new_nonzero_u32(2)],
         aux_output_ports: &[],
-        names: PortNames::const_default(),
+        names: PortNames {
+            layout: Some("Stéréo + capture"),
+            main_input: None,
+            main_output: Some("Sortie"),
+            aux_inputs: &["Capture"],
+            aux_outputs: &[],
+        },
     }];
     const MIDI_INPUT: MidiConfig = MidiConfig::Basic;
     const SAMPLE_ACCURATE_AUTOMATION: bool = true;
@@ -93,12 +123,32 @@ impl Plugin for KitPlayer {
     fn task_executor(&mut self) -> TaskExecutor<Self> {
         let params = self.params.clone();
         let slot = self.slot.clone();
+        let history = self.history.clone();
+        let recorder = self.recorder.clone();
         Box::new(move |task| {
-            let dropped = matches!(
+            // tâches qui écrivent leur propre statut, et celles qui méritent un « Annuler »
+            let dropped = !matches!(task, Task::LoadPath(_) | Task::Restore | Task::Undo);
+            let undoable = matches!(
                 task,
-                Task::DropSample { .. } | Task::Generate(_) | Task::Regenerate(_) | Task::Reshape
+                Task::DropSample { .. }
+                    | Task::Generate(_)
+                    | Task::Regenerate(_)
+                    | Task::Reshape
+                    | Task::SetRoundRobin(_)
+                    | Task::Capture
+                    | Task::LoadPath(_)
             );
             let shaping = params.shaping();
+            let previous = undoable.then(|| {
+                slot.current().map(|kit| {
+                    let state = params
+                        .kit_state
+                        .read()
+                        .map(|s| s.clone())
+                        .unwrap_or_default();
+                    (kit, state)
+                })
+            });
             let result = match task {
                 Task::Generate(path) => {
                     let name = path
@@ -143,6 +193,96 @@ impl Plugin for KitPlayer {
                     }
                     Some(_) => return,
                     None => Err(make_it_drum_core::kit::KitError::NoSource),
+                },
+                Task::SetSettings { pad, settings } => match slot.current() {
+                    Some(current) => set_settings(&current, pad, settings),
+                    None => Err(make_it_drum_core::kit::KitError::Empty),
+                },
+                Task::RenamePad { pad, label } => match slot.current() {
+                    Some(current) => rename_pad(&current, pad, &label),
+                    None => Err(make_it_drum_core::kit::KitError::Empty),
+                },
+                Task::SetRoundRobin(n) => match slot.current() {
+                    Some(current) if current.round_robin() != n => {
+                        set_round_robin(&current, n, |kit, i| {
+                            slot.set_status(format!("Variantes de frappe {}/{PAD_COUNT}", i + 1));
+                            slot.publish(Arc::new(kit.clone()));
+                        })
+                        .map(|(kit, state)| {
+                            slot.set_status(format!(
+                                "{n} frappe{} par pad",
+                                if n > 1 { "s" } else { "" }
+                            ));
+                            (kit, state)
+                        })
+                    }
+                    Some(_) => return,
+                    None => Err(make_it_drum_core::kit::KitError::NoSource),
+                },
+                Task::Undo => match history.pop() {
+                    Some((kit, state)) => {
+                        slot.set_status(format!("Retour au kit « {} »", kit.name));
+                        Ok((kit, state))
+                    }
+                    None => {
+                        slot.set_status("Rien à annuler");
+                        return;
+                    }
+                },
+                Task::SaveKit(name) => match slot.current() {
+                    Some(current) => {
+                        match export::save_kit(&current, &kits_dir(), &name) {
+                            Ok(path) => slot.set_status(format!("Enregistré : {}", path.display())),
+                            Err(e) => slot.set_status(format!("Échec de l'enregistrement : {e}")),
+                        }
+                        return;
+                    }
+                    None => return,
+                },
+                Task::ExportWavs(name) => match slot.current() {
+                    Some(current) => {
+                        match export::export_wavs(&current, &exports_dir(), &name) {
+                            Ok((folder, files)) => slot.set_status(format!(
+                                "{} WAV dans {}",
+                                files.len(),
+                                folder.display()
+                            )),
+                            Err(e) => slot.set_status(format!("Échec de l'export : {e}")),
+                        }
+                        return;
+                    }
+                    None => return,
+                },
+                Task::ExportDrumRack(name) => match slot.current() {
+                    Some(current) => {
+                        match export::export_drum_rack(&current, &exports_dir(), &name) {
+                            Ok(path) => slot.set_status(format!("Drum Rack : {}", path.display())),
+                            Err(e) => slot.set_status(format!("Échec de l'export : {e}")),
+                        }
+                        return;
+                    }
+                    None => return,
+                },
+                Task::Capture => match recorder.take() {
+                    Some(sample) => {
+                        let peak = sample.data.iter().fold(0f32, |m, v| m.max(v.abs()));
+                        if peak < 1e-4 {
+                            slot.set_status(
+                                "Capture silencieuse : routez une source vers l'entrée « Capture » du plugin",
+                            );
+                            return;
+                        }
+                        slot.set_status("Analyse de la capture…");
+                        generate_from_sample("capture", &sample, shaping, |kit, i| {
+                            slot.set_status(format!("Génération {}/{PAD_COUNT} — capture", i + 1));
+                            slot.publish(Arc::new(kit.clone()));
+                        })
+                        .map(|(kit, state)| {
+                            slot.set_status("Kit « capture » : 20 pads depuis l'entrée audio");
+                            (kit, state)
+                        })
+                    }
+                    None => return,
                 },
                 Task::LoadPath(path) => load_from_path(&path),
                 Task::DropSample { pad, path } => {
@@ -189,6 +329,9 @@ impl Plugin for KitPlayer {
             }
             match result {
                 Ok((kit, state)) => {
+                    if let Some(Some((prev_kit, prev_state))) = previous {
+                        history.push(prev_kit, prev_state);
+                    }
                     if !dropped {
                         let n = kit.pads.iter().filter(|p| !p.is_empty()).count();
                         slot.set_status(format!(
@@ -208,7 +351,13 @@ impl Plugin for KitPlayer {
     }
 
     fn editor(&mut self, async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        editor::create(self.params.clone(), self.slot.clone(), async_executor)
+        editor::create(
+            self.params.clone(),
+            self.slot.clone(),
+            self.history.clone(),
+            self.recorder.clone(),
+            async_executor,
+        )
     }
 
     fn initialize(
@@ -218,6 +367,7 @@ impl Plugin for KitPlayer {
         context: &mut impl InitContext<Self>,
     ) -> bool {
         self.engine.set_sample_rate(buffer_config.sample_rate);
+        self.slot.set_sample_rate(buffer_config.sample_rate);
         // l'état persistant a pu changer (ouverture de projet) : recharger si besoin
         let fingerprint = self.params.kit_fingerprint();
         if fingerprint != self.loaded_fingerprint {
@@ -234,9 +384,17 @@ impl Plugin for KitPlayer {
     fn process(
         &mut self,
         buffer: &mut Buffer,
-        _aux: &mut AuxiliaryBuffers,
+        aux: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
+        // capture : l'entrée auxiliaire va au tampon d'enregistrement
+        if self.recorder.is_recording() {
+            if let Some(input) = aux.inputs.first_mut() {
+                let channels = input.as_slice_immutable();
+                self.recorder.push(channels);
+            }
+        }
+        self.engine.set_melodic(self.params.melodic_pad_index());
         // nouveau kit publié ? (clone d'Arc, sans allocation ni blocage)
         let generation = self.slot.generation();
         if generation != self.seen_generation {
