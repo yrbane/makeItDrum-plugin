@@ -20,6 +20,8 @@ symphonia = { version = "0.5.4", default-features = false, features = ["aiff", "
 zip = { version = "9.0", default-features = false, features = ["deflate"] }
 base64 = "0.23"
 dirs = "6.0"
+# .adg de Live = XML gzippé
+flate2 = "1.0"
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", features = ["assert_process_allocs"] }
 nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug.git" }
 nih_plug_xtask = { git = "https://github.com/robbert-vdh/nih-plug.git" }

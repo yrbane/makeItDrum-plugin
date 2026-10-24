@@ -6,7 +6,10 @@
     semicolon_in_expressions_from_macros,
     semicolon_in_expressions_from_non_local_macros
 )]
+pub mod capture;
 pub mod editor;
+pub mod export;
+pub mod history;
 pub mod loader;
 pub mod params;
 pub mod slot;

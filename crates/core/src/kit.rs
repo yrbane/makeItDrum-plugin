@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::flavors::{flavor_at, FLAVORS as RECIPES};
 use crate::prng::fresh_seed;
 use crate::render::{render_pad_with, Shaping, SourceSample};
-use crate::wav::{decode_wav, Sample};
+use crate::wav::{decode_wav, encode_wav, Sample};
 
 pub const PAD_COUNT: usize = 20;
 /// Note GM du premier pad (C1, kick).
@@ -813,25 +813,6 @@ impl Kit {
 }
 
 /// WAV flottant 32 bits (sans perte) d'un échantillon.
-fn encode_wav(sample: &Sample) -> Result<Vec<u8>, KitError> {
-    let spec = hound::WavSpec {
-        channels: sample.channels,
-        sample_rate: sample.sample_rate,
-        bits_per_sample: 32,
-        sample_format: hound::SampleFormat::Float,
-    };
-    let wav_err = |e: hound::Error| KitError::Wav(e.to_string());
-    let mut wav = Cursor::new(Vec::new());
-    {
-        let mut w = hound::WavWriter::new(&mut wav, spec).map_err(wav_err)?;
-        for v in &sample.data {
-            w.write_sample(*v).map_err(wav_err)?;
-        }
-        w.finalize().map_err(wav_err)?;
-    }
-    Ok(wav.into_inner())
-}
-
 /// Nom de fichier sûr pour une entrée d'archive : ASCII alphanumérique, `-` et `_`.
 fn safe_stem(label: &str) -> String {
     let s: String = label

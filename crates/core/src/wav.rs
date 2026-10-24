@@ -180,3 +180,23 @@ fn decode_with_symphonia(bytes: &[u8], extension: Option<&str>) -> Result<Sample
         sample_rate,
     })
 }
+
+/// Encode un échantillon en WAV float 32 bits.
+pub fn encode_wav(sample: &Sample) -> Result<Vec<u8>, KitError> {
+    let spec = hound::WavSpec {
+        channels: sample.channels,
+        sample_rate: sample.sample_rate,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    let wav_err = |e: hound::Error| KitError::Wav(e.to_string());
+    let mut wav = std::io::Cursor::new(Vec::new());
+    {
+        let mut w = hound::WavWriter::new(&mut wav, spec).map_err(wav_err)?;
+        for v in &sample.data {
+            w.write_sample(*v).map_err(wav_err)?;
+        }
+        w.finalize().map_err(wav_err)?;
+    }
+    Ok(wav.into_inner())
+}
