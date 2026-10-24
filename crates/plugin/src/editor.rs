@@ -1,5 +1,10 @@
 //! Interface egui : selectbox de kits, chemin, gain, grille de pads.
-use std::path::PathBuf;
+//!
+//! Glisser-déposer : un fichier audio (WAV, AIFF, MP3, FLAC, OGG) déposé
+//! hors des pads devient un kit de 20 percussions, comme sur la page ; déposé
+//! sur un pad, il remplace le son de ce pad. Un `.zip` ou un dossier
+//! remplace le kit. Clic droit sur un pad : nouvelle variation.
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -7,6 +12,7 @@ use nih_plug::prelude::*;
 use nih_plug_egui::{create_egui_editor, egui, widgets};
 
 use make_it_drum_core::kit::PAD_COUNT;
+use make_it_drum_core::wav::is_audio_file;
 
 use crate::loader::{display_name, kits_dir, scan_kits};
 use crate::params::KitPlayerParams;
@@ -33,6 +39,41 @@ impl EditorState {
 const ACCENT: egui::Color32 = egui::Color32::from_rgb(0x3c, 0xb0, 0x43);
 const PAD_IDLE: egui::Color32 = egui::Color32::from_rgb(0x2b, 0x2b, 0x30);
 const PAD_LIT: egui::Color32 = egui::Color32::from_rgb(0x8f, 0xe3, 0x6b);
+const PAD_TARGET: egui::Color32 = egui::Color32::from_rgb(0x1f, 0x4a, 0x24);
+
+/// Ce que l'utilisateur dépose sur la fenêtre.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Drop {
+    /// Un kit (`.zip` ou dossier) : remplace le kit courant.
+    Kit(PathBuf),
+    /// Un fichier audio sur un pad : remplace le son de ce pad.
+    Sample { path: PathBuf, pad: usize },
+    /// Un fichier audio hors des pads : devient un kit de 20 percussions.
+    Generate(PathBuf),
+    /// Autre chose : refusé.
+    Unsupported(PathBuf),
+}
+
+/// Interprète un dépôt : `target` est le pad sous le curseur, s'il y en a un.
+pub fn classify_drop(path: &Path, target: Option<usize>) -> Drop {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if path.is_dir() || name.to_ascii_lowercase().ends_with(".zip") {
+        return Drop::Kit(path.to_path_buf());
+    }
+    if is_audio_file(&name) {
+        return match target {
+            Some(pad) => Drop::Sample {
+                path: path.to_path_buf(),
+                pad,
+            },
+            None => Drop::Generate(path.to_path_buf()),
+        };
+    }
+    Drop::Unsupported(path.to_path_buf())
+}
 
 pub fn create(
     params: Arc<KitPlayerParams>,
@@ -45,17 +86,19 @@ pub fn create(
         EditorState::new(),
         |_, _| {},
         move |ctx, setter, state| {
-            // fichiers déposés sur la fenêtre
-            let dropped: Vec<PathBuf> = ctx.input(|i| {
-                i.raw
-                    .dropped_files
-                    .iter()
-                    .filter_map(|f| f.path.clone())
-                    .collect()
+            // fichiers survolés / déposés sur la fenêtre, et position du curseur
+            let (hovering_audio, dropped, pointer) = ctx.input(|i| {
+                let hovering_audio = i.raw.hovered_files.iter().any(|f| {
+                    f.path
+                        .as_ref()
+                        .map(|p| is_audio_file(&p.to_string_lossy()))
+                        .unwrap_or(false)
+                });
+                let dropped: Option<PathBuf> =
+                    i.raw.dropped_files.iter().find_map(|f| f.path.clone());
+                (hovering_audio, dropped, i.pointer.latest_pos())
             });
-            if let Some(p) = dropped.into_iter().next() {
-                async_executor.execute_background(Task::LoadPath(p));
-            }
+            let current_kit = slot.current();
 
             egui::CentralPanel::default().show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -71,6 +114,46 @@ pub fn create(
                     ui.label("·");
                     ui.hyperlink_to("code ↗", PROJECT_URL);
                 });
+                ui.add_space(6.0);
+
+                // --- zone de dépôt : un son devient un kit
+                let has_source = current_kit.as_ref().is_some_and(|k| k.has_source());
+                let zone = egui::Frame::new()
+                    .fill(if hovering_audio { PAD_TARGET } else { PAD_IDLE })
+                    .stroke(egui::Stroke::new(
+                        1.0_f32,
+                        if hovering_audio { ACCENT } else { egui::Color32::DARK_GRAY },
+                    ))
+                    .corner_radius(6.0_f32)
+                    .inner_margin(egui::Margin::symmetric(12, 10))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.vertical_centered(|ui| {
+                            ui.label(
+                                egui::RichText::new(
+                                    "Déposez un son ici : il devient un kit de 20 percussions",
+                                )
+                                .strong(),
+                            );
+                            ui.label(
+                                egui::RichText::new(
+                                    "WAV, AIFF, MP3, FLAC, OGG — depuis le navigateur de Live ou le Finder. \
+                                     Sur un pad : remplace ce pad seulement. Clic droit sur un pad : variation.",
+                                )
+                                .small()
+                                .weak(),
+                            );
+                            if has_source
+                                && ui
+                                    .button("Nouvelles variations des 20 pads")
+                                    .on_hover_text("Rejoue chaque recette avec une nouvelle graine")
+                                    .clicked()
+                            {
+                                async_executor.execute_background(Task::Regenerate(None));
+                            }
+                        });
+                    });
+                let _ = zone;
                 ui.add_space(6.0);
 
                 // --- kits
@@ -135,20 +218,24 @@ pub fn create(
 
                 // --- pads
                 let playing = slot.playing();
-                let labels: Vec<(String, u8)> = slot
-                    .try_current()
-                    .flatten()
-                    .map(|k| k.pads.iter().map(|p| (p.label.clone(), p.note)).collect())
-                    .unwrap_or_default();
+                let pads: Vec<Option<(String, u8)>> = (0..PAD_COUNT)
+                    .map(|i| {
+                        current_kit
+                            .as_ref()
+                            .and_then(|k| k.pads.get(i))
+                            .filter(|p| !p.is_empty())
+                            .map(|p| (p.label.clone(), p.note))
+                    })
+                    .collect();
                 let avail = ui.available_width();
                 let pad_w = ((avail - 4.0 * 6.0) / 5.0).max(60.0);
+                let mut target: Option<usize> = None;
                 egui::Grid::new("pads").spacing([6.0, 6.0]).show(ui, |ui| {
-                    for i in 0..PAD_COUNT {
+                    for (i, pad) in pads.iter().enumerate() {
                         let lit = playing & (1 << i) != 0;
-                        let (label, note) = labels
-                            .get(i)
-                            .cloned()
-                            .unwrap_or_else(|| (format!("{:02}", i + 1), 36 + i as u8));
+                        let (label, note) = pad
+                            .clone()
+                            .unwrap_or_else(|| ("—".to_string(), 36 + i as u8));
                         let text = egui::RichText::new(format!("{label}\n{note}")).color(if lit {
                             egui::Color32::BLACK
                         } else {
@@ -157,14 +244,53 @@ pub fn create(
                         let button = egui::Button::new(text)
                             .fill(if lit { PAD_LIT } else { PAD_IDLE })
                             .min_size(egui::vec2(pad_w, 58.0));
-                        if ui.add_enabled(labels.len() > i, button).clicked() {
+                        let response = ui
+                            .add_enabled(pad.is_some(), button)
+                            .on_hover_text(if has_source {
+                                "Clic : jouer · clic droit : nouvelle variation"
+                            } else {
+                                "Clic : jouer"
+                            });
+                        if response.clicked() {
                             slot.request_trigger(i);
+                        }
+                        if response.secondary_clicked() && has_source {
+                            async_executor.execute_background(Task::Regenerate(Some(i)));
+                        }
+                        if pointer.is_some_and(|p| response.rect.contains(p)) {
+                            target = Some(i);
+                            // pendant un drag audio, le pad visé s'entoure d'accent
+                            if hovering_audio {
+                                ui.painter().rect(
+                                    response.rect,
+                                    4.0_f32,
+                                    PAD_TARGET.gamma_multiply(0.6),
+                                    egui::Stroke::new(2.0_f32, ACCENT),
+                                    egui::StrokeKind::Inside,
+                                );
+                            }
                         }
                         if i % 5 == 4 {
                             ui.end_row();
                         }
                     }
                 });
+
+                if let Some(path) = dropped {
+                    nih_log!("dépôt : {} (pad visé : {target:?})", path.display());
+                    match classify_drop(&path, target) {
+                        Drop::Kit(p) => async_executor.execute_background(Task::LoadPath(p)),
+                        Drop::Sample { path, pad } => {
+                            async_executor.execute_background(Task::DropSample { pad, path })
+                        }
+                        Drop::Generate(p) => async_executor.execute_background(Task::Generate(p)),
+                        Drop::Unsupported(p) => {
+                            let name = p.file_name().unwrap_or_default().to_string_lossy();
+                            nih_log!("dépôt refusé, format non pris en charge : {name}");
+                            slot.set_status(format!("Format non pris en charge : {name}"));
+                        }
+                    }
+                }
             });
             ctx.request_repaint_after(Duration::from_millis(40));
         },

@@ -5,11 +5,14 @@
 //! dossier de WAV. Sans manifeste, les WAV sont triés par nom et le pad `i`
 //! reçoit la note General MIDI `36 + i`.
 use std::fmt;
-use std::io::{Cursor, Read};
+use std::io::{Cursor, Read, Write};
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
+use crate::flavors::{flavor_at, FLAVORS as RECIPES};
+use crate::prng::fresh_seed;
+use crate::render::{render_pad, SourceSample};
 use crate::wav::{decode_wav, Sample};
 
 pub const PAD_COUNT: usize = 20;
@@ -39,6 +42,8 @@ pub enum KitError {
     MissingFile(String),
     Io(String),
     Empty,
+    /// Le kit n'a pas de son source : impossible de régénérer.
+    NoSource,
 }
 
 impl fmt::Display for KitError {
@@ -50,6 +55,7 @@ impl fmt::Display for KitError {
             KitError::MissingFile(m) => write!(f, "fichier absent de l'archive : {m}"),
             KitError::Io(m) => write!(f, "lecture impossible : {m}"),
             KitError::Empty => write!(f, "aucun WAV dans le kit"),
+            KitError::NoSource => write!(f, "ce kit n'a pas de son source à régénérer"),
         }
     }
 }
@@ -62,28 +68,87 @@ pub struct Pad {
     pub label: String,
     pub note: u8,
     pub sample: Sample,
+    /// Graine du rendu, si le pad a été généré à partir du son source.
+    pub seed: Option<u32>,
+}
+
+impl Pad {
+    /// Un pad sans son, qui tient la place `index` dans la grille.
+    pub fn empty(index: usize) -> Pad {
+        Pad {
+            index,
+            label: String::new(),
+            note: BASE_NOTE.saturating_add(index as u8),
+            sample: Sample::silent(),
+            seed: None,
+        }
+    }
+
+    /// `true` si le pad n'a aucun son.
+    pub fn is_empty(&self) -> bool {
+        self.sample.frames() == 0
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Kit {
     pub name: String,
     pub pads: Vec<Pad>,
+    /// Le son importé dont les pads sont tirés, mono ; permet de régénérer.
+    pub source: Option<Sample>,
 }
 
-#[derive(Deserialize)]
+/// Nom d'entrée du son source dans un `.kit.zip` écrit par le plugin.
+pub const SOURCE_FILE: &str = "source.wav";
+
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Manifest {
     schema_version: u32,
+    #[serde(skip_deserializing)]
+    app: &'static str,
     name: Option<String>,
+    source: Option<ManifestSource>,
     pads: Vec<ManifestPad>,
 }
 
-#[derive(Deserialize)]
+/// Le son source : les métadonnées de la page, plus `file` quand le plugin
+/// l'embarque dans l'archive.
+#[derive(Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct ManifestSource {
+    file_name: Option<String>,
+    sample_rate: Option<u32>,
+    duration: Option<f64>,
+    file: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
 struct ManifestPad {
     index: usize,
     flavor: Option<String>,
     note: Option<u8>,
+    seed: Option<u32>,
     file: String,
+}
+
+/// Les pads à leur place : triés par `index`, les trous comblés par des pads
+/// vides, au plus `PAD_COUNT`. Le moteur et l'interface lisent la position.
+fn normalize(mut pads: Vec<Pad>) -> Vec<Pad> {
+    pads.sort_by_key(|p| p.index);
+    let mut out: Vec<Pad> = Vec::with_capacity(PAD_COUNT);
+    for pad in pads {
+        if pad.index >= PAD_COUNT {
+            break;
+        }
+        while out.len() < pad.index {
+            out.push(Pad::empty(out.len()));
+        }
+        if out.len() == pad.index {
+            out.push(pad);
+        }
+    }
+    out
 }
 
 fn stem(name: &str) -> String {
@@ -146,11 +211,20 @@ impl Kit {
                     label: p.flavor.unwrap_or_else(|| stem(&p.file)),
                     note: p.note.unwrap_or(BASE_NOTE.saturating_add(p.index as u8)),
                     sample: decode_wav(&wav)?,
+                    seed: p.seed,
                 });
             }
+            let source = match manifest.source.and_then(|s| s.file) {
+                Some(file) => Some(decode_wav(&read_entry(
+                    &mut archive,
+                    &format!("{prefix}{file}"),
+                )?)?),
+                None => None,
+            };
             return Ok(Kit {
                 name: manifest.name.unwrap_or_else(|| name.to_string()),
-                pads,
+                pads: normalize(pads),
+                source,
             });
         }
         let mut wavs: Vec<String> = names.into_iter().filter(|n| is_wav(n)).collect();
@@ -163,6 +237,7 @@ impl Kit {
                 label: label_for(&stem(entry)),
                 note: BASE_NOTE + index as u8,
                 sample: decode_wav(&wav)?,
+                seed: None,
             });
         }
         if pads.is_empty() {
@@ -171,6 +246,7 @@ impl Kit {
         Ok(Kit {
             name: name.to_string(),
             pads,
+            source: None,
         })
     }
 
@@ -199,6 +275,7 @@ impl Kit {
                 label,
                 note: BASE_NOTE + index as u8,
                 sample: decode_wav(&bytes)?,
+                seed: None,
             });
         }
         if pads.is_empty() {
@@ -208,7 +285,11 @@ impl Kit {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "kit".into());
-        Ok(Kit { name, pads })
+        Ok(Kit {
+            name,
+            pads,
+            source: None,
+        })
     }
 
     /// Lit un kit depuis un `.zip` ou un dossier.
@@ -221,8 +302,216 @@ impl Kit {
         Kit::from_zip_bytes(&name, &bytes)
     }
 
-    /// Index du premier pad qui porte cette note.
+    /// Index du premier pad sonore qui porte cette note.
     pub fn pad_for_note(&self, note: u8) -> Option<usize> {
-        self.pads.iter().position(|p| p.note == note)
+        self.pads
+            .iter()
+            .position(|p| p.note == note && !p.is_empty())
+    }
+
+    /// Un kit sans aucun pad.
+    pub fn empty(name: &str) -> Kit {
+        Kit {
+            name: name.to_string(),
+            pads: Vec::new(),
+            source: None,
+        }
+    }
+
+    /// Fabrique les 20 percussions à partir d'un son, une recette par pad :
+    /// ce que fait la page. `seeds` fixe les graines (sinon tirées), et
+    /// `progress` est appelé après chaque pad rendu, avec le kit en cours.
+    pub fn generate(
+        name: &str,
+        source: &Sample,
+        seeds: Option<&[u32]>,
+        mut progress: impl FnMut(&Kit, usize),
+    ) -> Result<Kit, KitError> {
+        if source.frames() == 0 {
+            return Err(KitError::Empty);
+        }
+        let src = SourceSample::prepare(source);
+        let mut kit = Kit {
+            name: name.to_string(),
+            pads: Vec::with_capacity(PAD_COUNT),
+            source: Some(src.to_sample()),
+        };
+        for (index, flavor) in RECIPES.iter().enumerate() {
+            let seed = seeds
+                .and_then(|s| s.get(index).copied())
+                .unwrap_or_else(fresh_seed);
+            kit.pads.push(Pad {
+                index,
+                label: flavor.name.to_string(),
+                note: BASE_NOTE + index as u8,
+                sample: render_pad(flavor, &src, seed),
+                seed: Some(seed),
+            });
+            progress(&kit, index);
+        }
+        Ok(kit)
+    }
+
+    /// Rejoue la recette du pad `index` avec une nouvelle graine (ou `seed`),
+    /// à partir du son source du kit. Le nom, la note du pad sont conservés.
+    pub fn regenerate_pad(&mut self, index: usize, seed: Option<u32>) -> Result<(), KitError> {
+        let source = self.source.as_ref().ok_or(KitError::NoSource)?;
+        if index >= PAD_COUNT {
+            return Err(KitError::Manifest(format!("pad {index} hors de la grille")));
+        }
+        let src = SourceSample::prepare(source);
+        let seed = seed.unwrap_or_else(fresh_seed);
+        let flavor = flavor_at(index);
+        let sample = render_pad(flavor, &src, seed);
+        while self.pads.len() <= index {
+            self.pads.push(Pad::empty(self.pads.len()));
+        }
+        let pad = &mut self.pads[index];
+        if pad.is_empty() {
+            pad.label = flavor.name.to_string();
+        }
+        pad.sample = sample;
+        pad.seed = Some(seed);
+        Ok(())
+    }
+
+    /// `true` si le kit peut être régénéré (il garde son son source).
+    pub fn has_source(&self) -> bool {
+        self.source.is_some()
+    }
+
+    /// Met `sample` sur le pad `index` (0 à 19). Un pad existant garde sa
+    /// note ; un pad nouveau prend la note `36 + index`, et les places
+    /// intermédiaires sont comblées par des pads vides.
+    pub fn set_pad(&mut self, index: usize, label: &str, sample: Sample) -> Result<(), KitError> {
+        if index >= PAD_COUNT {
+            return Err(KitError::Manifest(format!(
+                "pad {index} hors de la grille (0 à {})",
+                PAD_COUNT - 1
+            )));
+        }
+        while self.pads.len() <= index {
+            self.pads.push(Pad::empty(self.pads.len()));
+        }
+        let pad = &mut self.pads[index];
+        pad.label = label.to_string();
+        pad.sample = sample;
+        pad.seed = None;
+        Ok(())
+    }
+
+    /// Index du premier pad vide ou absent, s'il reste une place.
+    pub fn first_free_pad(&self) -> Option<usize> {
+        self.pads
+            .iter()
+            .position(Pad::is_empty)
+            .or_else(|| (self.pads.len() < PAD_COUNT).then_some(self.pads.len()))
+    }
+
+    /// Sérialise le kit en `.kit.zip` (schéma v1) : `kit.json` et un WAV
+    /// flottant 32 bits par pad sonore. Ce qu'un preset embarque après une
+    /// modification.
+    pub fn to_kit_zip(&self) -> Result<Vec<u8>, KitError> {
+        let zip_err = |e: zip::result::ZipError| KitError::Zip(e.to_string());
+        let io_err = |e: std::io::Error| KitError::Io(e.to_string());
+        let mut cursor = Cursor::new(Vec::new());
+        let mut writer = zip::ZipWriter::new(&mut cursor);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored)
+            .large_file(true);
+        let mut manifest_pads = Vec::new();
+        for pad in self.pads.iter().filter(|p| !p.is_empty()) {
+            let file = format!("{:02}_{}.wav", pad.index + 1, safe_stem(&pad.label));
+            let spec = hound::WavSpec {
+                channels: pad.sample.channels,
+                sample_rate: pad.sample.sample_rate,
+                bits_per_sample: 32,
+                sample_format: hound::SampleFormat::Float,
+            };
+            let mut wav = Cursor::new(Vec::new());
+            {
+                let mut w = hound::WavWriter::new(&mut wav, spec)
+                    .map_err(|e| KitError::Wav(e.to_string()))?;
+                for v in &pad.sample.data {
+                    w.write_sample(*v)
+                        .map_err(|e| KitError::Wav(e.to_string()))?;
+                }
+                w.finalize().map_err(|e| KitError::Wav(e.to_string()))?;
+            }
+            writer.start_file(&file, opts).map_err(zip_err)?;
+            writer.write_all(&wav.into_inner()).map_err(io_err)?;
+            manifest_pads.push(ManifestPad {
+                index: pad.index,
+                flavor: Some(pad.label.clone()),
+                note: Some(pad.note),
+                seed: pad.seed,
+                file,
+            });
+        }
+        let source = match &self.source {
+            Some(src) if src.frames() > 0 => {
+                writer.start_file(SOURCE_FILE, opts).map_err(zip_err)?;
+                writer.write_all(&encode_wav(src)?).map_err(io_err)?;
+                Some(ManifestSource {
+                    file_name: None,
+                    sample_rate: Some(src.sample_rate),
+                    duration: Some(src.frames() as f64 / src.sample_rate as f64),
+                    file: Some(SOURCE_FILE.to_string()),
+                })
+            }
+            _ => None,
+        };
+        let manifest = Manifest {
+            schema_version: 1,
+            app: "make-it-drum",
+            name: Some(self.name.clone()),
+            source,
+            pads: manifest_pads,
+        };
+        let json =
+            serde_json::to_vec_pretty(&manifest).map_err(|e| KitError::Manifest(e.to_string()))?;
+        writer.start_file("kit.json", opts).map_err(zip_err)?;
+        writer.write_all(&json).map_err(io_err)?;
+        writer.finish().map_err(zip_err)?;
+        Ok(cursor.into_inner())
+    }
+}
+
+/// WAV flottant 32 bits (sans perte) d'un échantillon.
+fn encode_wav(sample: &Sample) -> Result<Vec<u8>, KitError> {
+    let spec = hound::WavSpec {
+        channels: sample.channels,
+        sample_rate: sample.sample_rate,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    let wav_err = |e: hound::Error| KitError::Wav(e.to_string());
+    let mut wav = Cursor::new(Vec::new());
+    {
+        let mut w = hound::WavWriter::new(&mut wav, spec).map_err(wav_err)?;
+        for v in &sample.data {
+            w.write_sample(*v).map_err(wav_err)?;
+        }
+        w.finalize().map_err(wav_err)?;
+    }
+    Ok(wav.into_inner())
+}
+
+/// Nom de fichier sûr pour une entrée d'archive : ASCII alphanumérique, `-` et `_`.
+fn safe_stem(label: &str) -> String {
+    let s: String = label
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if s.is_empty() {
+        "pad".to_string()
+    } else {
+        s
     }
 }

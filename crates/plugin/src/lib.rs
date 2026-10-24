@@ -20,7 +20,10 @@ use nih_plug::prelude::*;
 use make_it_drum_core::engine::Engine;
 use make_it_drum_core::kit::PAD_COUNT;
 
-use loader::{first_kit, kits_dir, load_from_path, load_from_state};
+use loader::{
+    first_kit, generate_from_path, kits_dir, load_from_path, load_from_state, regenerate,
+    replace_pad,
+};
 use params::KitPlayerParams;
 use slot::KitSlot;
 
@@ -28,6 +31,12 @@ use slot::KitSlot;
 pub enum Task {
     /// Charger un kit depuis un fichier ou un dossier (GUI).
     LoadPath(PathBuf),
+    /// Mettre un fichier audio déposé sur le pad `pad` du kit courant (GUI).
+    DropSample { pad: usize, path: PathBuf },
+    /// Fabriquer un kit de 20 percussions à partir d'un fichier audio (GUI).
+    Generate(PathBuf),
+    /// Nouvelle variation d'un pad, ou de tous (`None`), depuis le son source (GUI).
+    Regenerate(Option<usize>),
     /// Recharger le kit décrit par l'état persistant (ouverture de projet).
     Restore,
 }
@@ -80,8 +89,49 @@ impl Plugin for KitPlayer {
         let params = self.params.clone();
         let slot = self.slot.clone();
         Box::new(move |task| {
+            let dropped = matches!(
+                task,
+                Task::DropSample { .. } | Task::Generate(_) | Task::Regenerate(_)
+            );
             let result = match task {
+                Task::Generate(path) => {
+                    let name = path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned();
+                    slot.set_status(format!("Analyse de {name}…"));
+                    generate_from_path(&path, |kit, i| {
+                        slot.set_status(format!("Génération {}/{PAD_COUNT} — {}", i + 1, name));
+                        slot.publish(Arc::new(kit.clone()));
+                    })
+                    .map(|(kit, state)| {
+                        slot.set_status(format!("Kit « {} » généré depuis {name}", kit.name));
+                        (kit, state)
+                    })
+                }
+                Task::Regenerate(pad) => match slot.current() {
+                    Some(current) => regenerate(&current, pad).map(|(kit, state)| {
+                        slot.set_status(match pad {
+                            Some(i) => format!("Pad {} : nouvelle variation", i + 1),
+                            None => "20 nouvelles variations".to_string(),
+                        });
+                        (kit, state)
+                    }),
+                    None => Err(make_it_drum_core::kit::KitError::NoSource),
+                },
                 Task::LoadPath(path) => load_from_path(&path),
+                Task::DropSample { pad, path } => {
+                    let current = slot.current();
+                    replace_pad(current.as_deref(), pad, &path).map(|(kit, state)| {
+                        slot.set_status(format!(
+                            "Pad {} ← {}",
+                            pad + 1,
+                            path.file_name().unwrap_or_default().to_string_lossy()
+                        ));
+                        (kit, state)
+                    })
+                }
                 Task::Restore => {
                     let state = params
                         .kit_state
@@ -105,14 +155,24 @@ impl Plugin for KitPlayer {
                     }
                 }
             };
+            match &result {
+                Ok((kit, _)) => nih_log!(
+                    "tâche terminée : kit « {} », {} pads",
+                    kit.name,
+                    kit.pads.len()
+                ),
+                Err(e) => nih_log!("tâche échouée : {e}"),
+            }
             match result {
                 Ok((kit, state)) => {
-                    let n = kit.pads.len();
-                    slot.set_status(format!(
-                        "Kit « {} » — {n} pad{}",
-                        kit.name,
-                        if n > 1 { "s" } else { "" }
-                    ));
+                    if !dropped {
+                        let n = kit.pads.iter().filter(|p| !p.is_empty()).count();
+                        slot.set_status(format!(
+                            "Kit « {} » — {n} pad{}",
+                            kit.name,
+                            if n > 1 { "s" } else { "" }
+                        ));
+                    }
                     if let Ok(mut s) = params.kit_state.write() {
                         *s = state;
                     }

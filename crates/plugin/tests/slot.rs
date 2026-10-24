@@ -6,6 +6,7 @@ fn kit(name: &str) -> Arc<Kit> {
     Arc::new(Kit {
         name: name.into(),
         pads: vec![],
+        source: None,
     })
 }
 

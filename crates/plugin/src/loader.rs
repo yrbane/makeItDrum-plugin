@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use base64::Engine as _;
 use make_it_drum_core::kit::{Kit, KitError};
+use make_it_drum_core::wav::decode_audio;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -30,6 +31,79 @@ pub fn load_from_path(path: &Path) -> Result<(Arc<Kit>, KitState), KitError> {
         name: Some(kit.name.clone()),
         zip_base64,
     };
+    Ok((Arc::new(kit), state))
+}
+
+/// Nom de kit d'une instance qui n'en avait pas quand on y dépose un premier son.
+pub const SCRATCH_KIT_NAME: &str = "kit perso";
+
+/// L'état à persister pour un kit fabriqué ou modifié dans le plugin : le kit
+/// entier, embarqué en `.kit.zip` (graines et son source compris).
+pub fn state_for(kit: &Kit) -> Result<KitState, KitError> {
+    let zip = kit.to_kit_zip()?;
+    Ok(KitState {
+        path: None,
+        name: Some(kit.name.clone()),
+        zip_base64: Some(base64::engine::general_purpose::STANDARD.encode(zip)),
+    })
+}
+
+/// Lit un fichier audio quel que soit son format.
+pub fn read_audio(path: &Path) -> Result<make_it_drum_core::wav::Sample, KitError> {
+    let bytes = std::fs::read(path).map_err(|e| KitError::Io(e.to_string()))?;
+    let extension = path.extension().map(|e| e.to_string_lossy().into_owned());
+    decode_audio(&bytes, extension.as_deref())
+}
+
+/// Fabrique un kit de 20 percussions à partir du fichier audio `path`, comme
+/// la page. `progress` reçoit le kit après chaque pad rendu.
+pub fn generate_from_path(
+    path: &Path,
+    progress: impl FnMut(&Kit, usize),
+) -> Result<(Arc<Kit>, KitState), KitError> {
+    let sample = read_audio(path)?;
+    let name = path
+        .file_stem()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "kit".to_string());
+    let kit = Kit::generate(&name, &sample, None, progress)?;
+    let state = state_for(&kit)?;
+    Ok((Arc::new(kit), state))
+}
+
+/// Nouvelle variation d'un pad (ou de tous si `pad` est `None`) du kit courant.
+pub fn regenerate(current: &Kit, pad: Option<usize>) -> Result<(Arc<Kit>, KitState), KitError> {
+    let mut kit = current.clone();
+    match pad {
+        Some(i) => kit.regenerate_pad(i, None)?,
+        None => {
+            for i in 0..kit.pads.len().max(if kit.has_source() { 20 } else { 0 }) {
+                kit.regenerate_pad(i, None)?;
+            }
+        }
+    }
+    let state = state_for(&kit)?;
+    Ok((Arc::new(kit), state))
+}
+
+/// Met le fichier audio `path` sur le pad `pad` du kit courant (ou d'un kit
+/// neuf), et construit l'état à persister : le kit modifié tout entier,
+/// embarqué en `.kit.zip`, pour que le projet se rouvre sans le fichier.
+pub fn replace_pad(
+    current: Option<&Kit>,
+    pad: usize,
+    path: &Path,
+) -> Result<(Arc<Kit>, KitState), KitError> {
+    let sample = read_audio(path)?;
+    let label = path
+        .file_stem()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "son".to_string());
+    let mut kit = current
+        .cloned()
+        .unwrap_or_else(|| Kit::empty(SCRATCH_KIT_NAME));
+    kit.set_pad(pad, &label, sample)?;
+    let state = state_for(&kit)?;
     Ok((Arc::new(kit), state))
 }
 

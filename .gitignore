@@ -6,3 +6,4 @@ target/
 .claude/
 *.component/
 au/build/
+.DS_Store

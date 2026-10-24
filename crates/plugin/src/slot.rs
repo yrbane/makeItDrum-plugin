@@ -60,6 +60,11 @@ impl KitSlot {
         self.generation.load(Ordering::Acquire)
     }
 
+    /// Le kit courant, en attendant le verrou (thread de fond ou GUI, jamais audio).
+    pub fn current(&self) -> Option<Arc<Kit>> {
+        self.current.lock().ok().and_then(|c| c.clone())
+    }
+
     /// Lecture non bloquante du kit courant (thread audio). `None` si le verrou est pris.
     pub fn try_current(&self) -> Option<Option<Arc<Kit>>> {
         self.current.try_lock().ok().map(|c| c.clone())

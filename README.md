@@ -2,26 +2,34 @@
 
 > un projet de [Masao « Saiya Geez »](https://beacons.ai/saiyageez) · plugin par yrbane
 
-Un instrument **VST3 / CLAP / Audio Unit** qui joue, depuis le MIDI, les kits de 20 percussions
-fabriqués sur la page [make it drum](https://yrbane.github.io/makeItDrum/)
-([dépôt](https://github.com/yrbane/makeItDrum)). Le son est strictement celui de la
-page : ce sont les mêmes fichiers WAV. Le plugin ne génère rien, il joue.
+Un instrument **VST3 / CLAP / Audio Unit** qui fait ce que fait la page
+[make it drum](https://yrbane.github.io/makeItDrum/) ([dépôt](https://github.com/yrbane/makeItDrum)),
+mais dans la DAW : **n'importe quel son glissé dans le plugin devient un kit de 20 percussions**,
+joué depuis le MIDI. Le moteur de la page (analyse spectrale, 20 recettes, graine par pad) est
+porté en Rust ; le plugin lit aussi les kits exportés par la page.
 
-- **Version** : 0.2.0 — voir [CHANGELOG.md](CHANGELOG.md)
+- **Version** : 0.3.0 — voir [CHANGELOG.md](CHANGELOG.md)
 - **Télécharger** : [releases](https://github.com/yrbane/makeItDrum-plugin/releases) — Linux (VST3, CLAP), Windows (VST3, CLAP), macOS universel (VST3, CLAP, AU)
 
 ## Utilisation
 
-1. Sur la page make it drum, importez un son, puis **Exporter le pack** : vous obtenez
-   `makeitdrum_pack.zip`.
-2. Déposez ce fichier dans `~/Documents/makeitdrum/kits/` (ou dans le dossier donné
-   par la variable `MAKEITDRUM_KITS`).
-3. Dans votre DAW, ajoutez l'instrument **make it drum** : une instance neuve charge
-   le premier kit du dossier. Changez de kit dans la selectbox (ou collez un chemin,
-   ou déposez le `.zip` sur la fenêtre).
-4. Jouez : pad 1 = note 36 (C1), pad 2 = 37, … pad 20 = 55. Un clic sur un pad le
-   déclenche aussi. Le kit est embarqué dans le preset : le projet se rouvre sans le
-   fichier.
+1. Dans votre DAW, ajoutez l'instrument **make it drum** sur une piste MIDI.
+2. **Glissez un son dans la fenêtre** (zone du haut, ou n'importe où hors des pads) depuis le
+   navigateur de la DAW (celui d'Ableton Live, par exemple) ou le Finder : WAV, AIFF, MP3, M4A/AAC,
+   FLAC ou OGG. Un claquement de porte, une voix, une casserole… En une seconde environ,
+   les 20 pads se remplissent : BOOM, KICK, THUD, … CHAOS, les 20 recettes de la page.
+3. Jouez : pad 1 = note 36 (C1), pad 2 = 37, … pad 20 = 55. Un clic sur un pad le
+   déclenche aussi.
+4. **Clic droit sur un pad** : nouvelle variation de cette recette (nouvelle graine), comme
+   le clic sur la page. Le bouton **Nouvelles variations des 20 pads** refait tout le kit.
+5. **Glissez un son sur un pad** : ce pad seul prend ce son et son nom, et garde sa note.
+   Les autres pads ne bougent pas.
+6. Le kit, ses graines et le son source sont embarqués dans le preset : le projet se
+   rouvre sans les fichiers, et les variations restent possibles.
+7. Les kits exportés par la page (`.kit.zip`, ou l'ancien `makeitdrum_pack.zip`) se chargent
+   aussi : déposez-les dans `~/Documents/makeitdrum/kits/` (ou le dossier de la variable
+   `MAKEITDRUM_KITS`) pour la selectbox, collez un chemin, ou glissez le `.zip` sur la fenêtre.
+   Une instance neuve charge le premier kit du dossier, s'il y en a un.
 
 | Recette | BOOM | KICK | THUD | SNAP | CRACK | BUZZ | RING | TICK | GLASS | WASH | BEND | SWELL | STUTTER | CRUSH | PHASE | GROWL | PERC | BELL | DARK | CHAOS |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -29,9 +37,30 @@ page : ce sont les mêmes fichiers WAV. Le plugin ne génère rien, il joue.
 
 Les pads du pack de la page prennent les noms des recettes (BOOM, KICK, …).
 
+Pour démarrer, `extras/rythmes/rythmes.py` écrit sept clips MIDI de 4 mesures sur ce
+mapping (quatre au plancher, boom bap, breakbeat, half-time, polyrythme, chaos…) :
+`python3 extras/rythmes/rythmes.py "~/Music/Ableton/User Library/make it drum/rythmes"`,
+puis glissez un `.mid` depuis le navigateur de la DAW sur la piste du plugin.
+
+### Le même moteur que la page, en Rust
+
+Le son déposé est analysé (FFT, fondamentale, pic médium, centroïde, brillance), puis chaque
+recette est rendue hors ligne : transitoire d'attaque, couches lues à offset et vitesse
+variables, renfort de basses saturé, réseau d'allpass balayé par un LFO, comb en feedback,
+saturation multi-étages et wavefolder, EQ de basses, reverb par convolution, compresseur,
+bitcrush et normalisation de crête. L'aléatoire est le mulberry32 de la page, avec une graine
+par pad : les tirages sont **identiques au bit près** à ceux de la page pour une graine donnée
+(vérifié contre ses snapshots). Le rendu audio, lui, est une réécriture des nœuds Web Audio
+(biquads selon la spécification, compresseur simplifié, sans suréchantillonnage des
+waveshapers) : même recette, même caractère, pas la même forme d'onde que Chrome.
+
 Formats de kit acceptés : le pack de la page (20 WAV, sans manifeste), un `.kit.zip`
 avec un `kit.json` (schéma v1, cf. [la spec](docs/superpowers/specs/2026-10-22-kit-player-design.md))
-qui peut renommer les pads et changer leurs notes, ou un dossier de WAV.
+qui peut renommer les pads, changer leurs notes et porter leurs graines, ou un dossier de WAV.
+Un pad dont l'`index` saute des places laisse des pads vides entre deux. Un kit généré ou
+modifié dans le plugin est resérialisé dans ce format (WAV flottant 32 bits, sans perte), avec
+`source.wav` et `source.file` dans le manifeste pour pouvoir régénérer ; la page ignore ce
+champ et lit le kit normalement.
 
 ### Installation
 
@@ -59,7 +88,7 @@ validé par `auval` en CI ; il n'a pas encore été ouvert dans Logic par un hum
 ## Développement
 
 ```bash
-cargo test --workspace                                   # 43 tests, dont un golden audio
+cargo test --workspace                                   # 74 tests : golden audio, snapshots du moteur de la page
 cargo clippy --workspace --all-targets -- -D warnings
 cargo xtask bundle make-it-drum --release         # → target/bundled/
 cargo xtask bundle make-it-drum --release --target x86_64-pc-windows-gnu   # cross via mingw
@@ -78,10 +107,13 @@ les hôtes rechargent l'état correctement.
 
 Structure :
 
-- `crates/core` — cœur pur, sans hôte : `wav` (décodage), `kit` (pack web, `kit.json`, dossier, mapping note → pad), `voice` (one-shot interpolé), `engine` (20 voix, mixage). Tests dans `crates/core/tests/`, golden dans `tests/golden/`.
+- `crates/core` — cœur pur, sans hôte : `wav` (décodage WAV par hound, AIFF/MP3/FLAC/OGG/M4A par symphonia), `kit` (pack web, `kit.json`, dossier, mapping note → pad, génération, remplacement d'un pad, export `.kit.zip`), `voice` (one-shot interpolé), `engine` (20 voix, mixage). Le moteur porté de la page : `prng` (mulberry32), `analysis` (FFT, profil spectral), `curves` (tables de saturation, enveloppes), `flavors` (les 20 recettes), `dsp` (biquads Web Audio, retard, compresseur, convolution), `render` (`plan` tire les paramètres dans l'ordre de la page, `render` exécute le graphe). Tests dans `crates/core/tests/` : golden audio, valeurs de référence du JS (`pure.rs`), snapshots du renderer de la page pour la graine 42 (`render.rs`), fixture `tests/fixtures/source.wav` (celle de la page).
 - `crates/plugin` — nih-plug : `slot` (partage GUI / fond / audio sans blocage), `loader` (état persistant, dossier des kits), `params`, `editor` (egui), `lib` (le `Plugin`).
 - `xtask` — bundler nih-plug.
 - `au` — gabarit CMake de l'Audio Unit (clap-wrapper, CLAP embarqué).
+- `vendor/baseview` — copie de la révision épinglée, avec les types de pasteboard que Live utilise pour ses fichiers (liste de chemins et `public.file-url`) et la réponse `Copy | Generic` au survol ; sans lui, Live n'autorise pas le dépôt.
+- `extras/rythmes` — générateur de clips MIDI de démonstration.
+- `vendor/egui-baseview` — copie de la révision épinglée par nih-plug, plus le relais des événements de glisser-déposer de baseview vers egui (`hovered_files`, `dropped_files`, `AcceptDrop`) ; sans lui, aucun dépôt n'atteint l'interface. Branché par `[patch]` dans `Cargo.toml`.
 
 Contraintes : thread audio sans allocation (`assert_process_allocs` en debug) ni verrou bloquant ; TDD ; commits en français.
 

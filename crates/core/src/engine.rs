@@ -50,7 +50,9 @@ impl Engine {
             return;
         }
         let Some(kit) = self.kit.as_ref() else { return };
-        let Some(p) = kit.pads.get(pad) else { return };
+        let Some(p) = kit.pads.get(pad).filter(|p| !p.is_empty()) else {
+            return;
+        };
         let ratio = p.sample.sample_rate as f64 / self.host_rate as f64;
         self.voices[pad].trigger(velocity, ratio);
     }

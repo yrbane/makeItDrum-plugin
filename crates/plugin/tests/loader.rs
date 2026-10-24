@@ -137,3 +137,87 @@ fn first_kit_is_the_first_zip_of_the_folder_or_none() {
     assert_eq!(first_kit(&d), Some(d.join("a.zip")));
     std::fs::remove_dir_all(&d).unwrap();
 }
+
+#[test]
+fn replace_pad_builds_a_kit_from_scratch_and_embeds_it_in_the_state() {
+    use make_it_drum::loader::{replace_pad, SCRATCH_KIT_NAME};
+    let dir = tmp();
+    let wav = dir.join("Kick 808.wav");
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 44100,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut w = hound::WavWriter::create(&wav, spec).unwrap();
+    for i in 0..10 {
+        w.write_sample((i * 100) as i16).unwrap();
+    }
+    w.finalize().unwrap();
+
+    let (kit, state) = replace_pad(None, 3, &wav).unwrap();
+    assert_eq!(kit.name, SCRATCH_KIT_NAME);
+    assert_eq!(kit.pads.len(), 4);
+    assert_eq!(kit.pads[3].label, "Kick 808");
+    assert_eq!(state.path, None);
+    assert_eq!(state.name.as_deref(), Some(SCRATCH_KIT_NAME));
+    let (restored, _) = load_from_state(&state).unwrap();
+    assert_eq!(
+        restored.pads.len(),
+        4,
+        "le projet se rouvre sans le fichier"
+    );
+    assert_eq!(restored.pads[3].sample, kit.pads[3].sample);
+
+    // sur un kit existant : les autres pads restent, le nom du kit aussi
+    let (kit2, state2) = replace_pad(Some(&kit), 0, &wav).unwrap();
+    assert_eq!(kit2.pads[0].label, "Kick 808");
+    assert_eq!(kit2.pads[3].label, "Kick 808");
+    assert_eq!(state2.name, state.name);
+    assert!(replace_pad(Some(&kit), 0, &dir.join("absent.wav")).is_err());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn generate_from_path_builds_a_full_kit_embedded_in_the_state() {
+    use make_it_drum::loader::{generate_from_path, regenerate};
+    let dir = tmp();
+    let wav = dir.join("Porte qui claque.wav");
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate: 44100,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut w = hound::WavWriter::create(&wav, spec).unwrap();
+    for i in 0..4410 {
+        let v = ((i as f32 * 0.05).sin() * 12000.0 * (1.0 - i as f32 / 4410.0)) as i16;
+        w.write_sample(v).unwrap();
+        w.write_sample(-v).unwrap();
+    }
+    w.finalize().unwrap();
+
+    let mut calls = 0;
+    let (kit, state) = generate_from_path(&wav, |_, _| calls += 1).unwrap();
+    assert_eq!(calls, 20);
+    assert_eq!(kit.name, "Porte qui claque");
+    assert_eq!(kit.pads.len(), 20);
+    assert!(kit.has_source());
+    assert_eq!(state.name.as_deref(), Some("Porte qui claque"));
+    let (restored, _) = load_from_state(&state).unwrap();
+    assert_eq!(restored.pads[11].seed, kit.pads[11].seed);
+    assert_eq!(restored.pads[11].sample, kit.pads[11].sample);
+    assert!(restored.has_source(), "le son source est dans le preset");
+
+    let (varied, _) = regenerate(&restored, Some(2)).unwrap();
+    assert_ne!(varied.pads[2].seed, restored.pads[2].seed);
+    assert_eq!(varied.pads[3].sample, restored.pads[3].sample);
+    let (all, state2) = regenerate(&varied, None).unwrap();
+    assert!(all
+        .pads
+        .iter()
+        .zip(&varied.pads)
+        .all(|(a, b)| a.seed != b.seed));
+    assert!(state2.zip_base64.is_some());
+    std::fs::remove_dir_all(&dir).ok();
+}

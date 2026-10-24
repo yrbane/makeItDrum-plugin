@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0 — 2026-10-23 · « Un son devient un kit, dans la DAW »
+
+- **Le moteur de la page, porté en Rust** : glisser un son (WAV, AIFF, MP3, M4A/AAC, FLAC, OGG) dans la fenêtre fabrique les 20 percussions (BOOM … CHAOS) en une seconde environ, sur le thread de fond, les pads se remplissant au fur et à mesure. Analyse spectrale (FFT, fondamentale, pic médium, centroïde, brillance), les 20 recettes comme données, planification des tirages dans l'ordre exact de la page (mulberry32, graine par pad : **tirages identiques au bit près**, vérifiés contre les snapshots `renderer-BOOM/CHAOS/TICK` de la page), puis rendu : transitoire, couches, sub, phaser à LFO, comb (retard minimal d'un quantum comme Web Audio), saturation + wavefolder, EQ, reverb par convolution FFT, compresseur, bitcrush, normalisation.
+- **Variations** : clic droit sur un pad = nouvelle graine pour cette recette ; bouton « Nouvelles variations des 20 pads ».
+- **Glisser-déposer d'un son sur un pad** : remplace ce pad seul (nom du fichier, note conservée). Formats décodés par hound (WAV) et symphonia (le reste). Le pad visé s'entoure de vert pendant le survol.
+- **Kit embarqué dans le preset** : kit, graines et son source (`source.wav` + `source.file` dans `kit.json` v1, ignoré par la page) resérialisés en `.kit.zip` dans l'état du plugin ; le projet se rouvre sans les fichiers et reste régénérable.
+- **Pads vides** : un `kit.json` aux index non contigus place chaque pad à son index, les trous restent des pads vides (grisés, muets, qui ne répondent pas à leur note).
+- **Correctif : le dépôt de fichiers ne fonctionnait pas.** egui-baseview, à la révision épinglée par nih-plug, ignore les événements de drag de baseview et refuse le dépôt côté macOS ; copie patchée dans `vendor/egui-baseview` (`[patch]`). Le dépôt d'un `.zip` annoncé en 0.1.0 marche donc à partir de cette version.
+- **Correctif : la fenêtre était trop basse dans Live**, les deux dernières rangées de pads étaient coupées. Hauteur portée de 430 à 560 points ; la taille persistée change de clé (`editor-state-v2`) pour que les projets déjà sauvegardés reprennent la bonne hauteur.
+- 74 tests, dont les valeurs de référence du JS de la page (PRNG, analyse, courbes, snapshots du renderer) et la fixture sonore de la page, décodée aussi en FLAC et en M4A (fixtures produites par afconvert).
+
 ## 0.2.0 — 2026-10-22 · « Audio Unit pour Logic et GarageBand »
 
 - **Audio Unit v2** (`make it drum.component`) pour macOS, construit en CI avec [clap-wrapper](https://github.com/free-audio/clap-wrapper) autour du CLAP universel (arm64 + x86_64), CLAP embarqué dans le composant : Logic Pro, GarageBand et MainStage voient l'instrument (type `aumu`, fabricant `SaGz`, sous-type `MkDr`).

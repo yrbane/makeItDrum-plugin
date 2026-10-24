@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/core", "crates/plugin", "xtask"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT"
@@ -15,6 +15,8 @@ make-it-drum-core = { path = "crates/core" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 hound = "3.5"
+# décodage des échantillons déposés depuis le navigateur d'une DAW (AIFF, MP3, FLAC, OGG)
+symphonia = { version = "0.5.4", default-features = false, features = ["aiff", "mp3", "flac", "ogg", "vorbis", "pcm", "aac", "alac", "isomp4"] }
 zip = { version = "9.0", default-features = false, features = ["deflate"] }
 base64 = "0.23"
 dirs = "6.0"
@@ -30,3 +32,13 @@ strip = "symbols"
 
 [profile.dev]
 opt-level = 1
+
+# egui-baseview épinglé par nih-plug ignore les événements de glisser-déposer de
+# baseview : copie locale avec le relais vers egui (`vendor/egui-baseview`).
+[patch."https://github.com/BillyDM/egui-baseview.git"]
+egui-baseview = { path = "vendor/egui-baseview" }
+
+# baseview : types de pasteboard modernes (public.file-url), masque Copy+Generic,
+# journal des dépôts (`vendor/baseview`).
+[patch."https://github.com/RustAudio/baseview.git"]
+baseview = { path = "vendor/baseview" }

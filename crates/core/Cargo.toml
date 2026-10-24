@@ -16,3 +16,4 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 hound = { workspace = true }
 zip = { workspace = true }
+symphonia = { workspace = true }
