@@ -319,3 +319,59 @@ fn recipe_names_and_pad_names_agree() {
         .collect();
     assert_eq!(names, make_it_drum_core::kit::FLAVORS.to_vec());
 }
+
+#[test]
+fn reshape_rerenders_seeded_pads_only_and_travels_in_the_kit_zip() {
+    use make_it_drum_core::render::Shaping;
+    let wav = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/source.wav"
+    ))
+    .unwrap();
+    let sound = make_it_drum_core::wav::decode_wav(&wav).unwrap();
+    let seeds: Vec<u32> = (0..20).map(|i| 500 + i).collect();
+    let mut kit = Kit::generate("k", &sound, Some(&seeds), |_, _| {}).unwrap();
+    assert!(kit.shaping.is_default());
+    let dropped =
+        make_it_drum_core::wav::decode_wav(&common::sine_wav(300.0, 400, 22050, 1, 16)).unwrap();
+    kit.set_pad(3, "main", dropped.clone()).unwrap();
+    let before = kit.clone();
+
+    let mut seen = Vec::new();
+    kit.reshape(Shaping::new(0.8, 0.5), |_, i| seen.push(i))
+        .unwrap();
+    assert_eq!(seen.len(), 19, "19 pads générés rejoués, pas le pad déposé");
+    assert!(!seen.contains(&3));
+    assert_eq!(kit.shaping, Shaping::new(0.8, 0.5));
+    assert_eq!(kit.pads[3].sample, dropped, "le pad déposé ne bouge pas");
+    assert_eq!(kit.pads[3].seed, None);
+    for i in (0..20).filter(|i| *i != 3) {
+        assert_eq!(kit.pads[i].seed, before.pads[i].seed, "graine conservée");
+        assert_ne!(kit.pads[i].sample, before.pads[i].sample, "pad {i} rejoué");
+    }
+
+    // même cadrage dès la génération → mêmes sons
+    let direct =
+        Kit::generate_with("k", &sound, Some(&seeds), Shaping::new(0.8, 0.5), |_, _| {}).unwrap();
+    assert_eq!(direct.pads[7].sample, kit.pads[7].sample);
+
+    // le cadrage voyage dans le .kit.zip, et regenerate_pad l'utilise
+    let back = Kit::from_zip_bytes("x", &kit.to_kit_zip().unwrap()).unwrap();
+    assert_eq!(back.shaping, Shaping::new(0.8, 0.5));
+    assert_eq!(back.pads[7].sample, kit.pads[7].sample);
+    let mut again = back.clone();
+    again.regenerate_pad(7, Some(507)).unwrap();
+    assert_eq!(again.pads[7].sample, kit.pads[7].sample);
+
+    // sans source : erreur ; cadrage nul : pas de clé dans le manifeste
+    let mut plain = Kit::empty("plain");
+    assert_eq!(
+        plain.reshape(Shaping::default(), |_, _| {}),
+        Err(KitError::NoSource)
+    );
+    let zip = before.to_kit_zip().unwrap();
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip)).unwrap();
+    let mut json = String::new();
+    std::io::Read::read_to_string(&mut archive.by_name("kit.json").unwrap(), &mut json).unwrap();
+    assert!(!json.contains("shaping"));
+}

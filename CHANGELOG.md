@@ -8,8 +8,9 @@
 - **Kit embarqué dans le preset** : kit, graines et son source (`source.wav` + `source.file` dans `kit.json` v1, ignoré par la page) resérialisés en `.kit.zip` dans l'état du plugin ; le projet se rouvre sans les fichiers et reste régénérable.
 - **Pads vides** : un `kit.json` aux index non contigus place chaque pad à son index, les trous restent des pads vides (grisés, muets, qui ne répondent pas à leur note).
 - **Correctif : le dépôt de fichiers ne fonctionnait pas.** egui-baseview, à la révision épinglée par nih-plug, ignore les événements de drag de baseview et refuse le dépôt côté macOS ; copie patchée dans `vendor/egui-baseview` (`[patch]`). Le dépôt d'un `.zip` annoncé en 0.1.0 marche donc à partir de cette version.
+- **Fidélité et Durée** : deux paramètres du plugin (automatisables, 0 à 100 %) qui cadrent la génération pour reconnaître plus ou moins le son d'avant. Fidélité rapproche hauteur, filtres, saturation, comb, reverb, bitcrush, compression et offset de lecture du son d'origine et efface le renfort grave ; Durée étire palier et chute vers la durée du son (4 s au plus). Les tirages restent ceux de la page, dans le même ordre : relâcher un curseur rejoue les pads générés avec leurs graines (`Kit::reshape`), les pads déposés à la main ne bougent pas. Le cadrage est écrit dans `kit.json` (`shaping`, absent à zéro, ignoré par la page).
 - **Correctif : la fenêtre était trop basse dans Live**, les deux dernières rangées de pads étaient coupées. Hauteur portée de 430 à 560 points ; la taille persistée change de clé (`editor-state-v2`) pour que les projets déjà sauvegardés reprennent la bonne hauteur.
-- 74 tests, dont les valeurs de référence du JS de la page (PRNG, analyse, courbes, snapshots du renderer) et la fixture sonore de la page, décodée aussi en FLAC et en M4A (fixtures produites par afconvert).
+- 81 tests, dont les valeurs de référence du JS de la page (PRNG, analyse, courbes, snapshots du renderer) et la fixture sonore de la page, décodée aussi en FLAC et en M4A (fixtures produites par afconvert).
 
 ## 0.2.0 — 2026-10-22 · « Audio Unit pour Logic et GarageBand »
 

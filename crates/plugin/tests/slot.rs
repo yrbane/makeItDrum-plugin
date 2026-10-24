@@ -7,6 +7,7 @@ fn kit(name: &str) -> Arc<Kit> {
         name: name.into(),
         pads: vec![],
         source: None,
+        shaping: Default::default(),
     })
 }
 

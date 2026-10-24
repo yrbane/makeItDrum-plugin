@@ -6,7 +6,10 @@ use make_it_drum_core::analysis::Analysis;
 use make_it_drum_core::dsp::FilterKind;
 use make_it_drum_core::flavors::FLAVORS;
 use make_it_drum_core::prng::Random;
-use make_it_drum_core::render::{plan, render, render_pad, Rate, SourceSample};
+use make_it_drum_core::render::{
+    plan, plan_with, render, render_pad, render_pad_with, Rate, Shaping, SourceSample,
+    MAX_STRETCHED_TOTAL,
+};
 
 const ANALYSIS: Analysis = Analysis {
     centroid: 1800.0,
@@ -236,4 +239,181 @@ fn prepare_mixes_stereo_down_to_mono() {
     assert_eq!(src.data, vec![0.0, 0.5, 0.2]);
     assert_eq!(src.to_sample().channels, 1);
     assert!((src.duration() - 3.0 / 48000.0).abs() < 1e-12);
+}
+
+#[test]
+fn default_shaping_is_the_page_and_fidelity_keeps_the_draws() {
+    let src = snapshot_source();
+    for cfg in FLAVORS.iter() {
+        let page = plan(cfg, &src, &mut Random::from_seed(42));
+        let same = plan_with(cfg, &src, &mut Random::from_seed(42), &Shaping::default());
+        assert_eq!(same, page, "{} : cadrage nul = page", cfg.name);
+        let faithful = plan_with(
+            cfg,
+            &src,
+            &mut Random::from_seed(42),
+            &Shaping::new(1.0, 0.0),
+        );
+        assert_eq!(
+            faithful.timings, page.timings,
+            "{} : mêmes durées",
+            cfg.name
+        );
+        assert_eq!(
+            faithful.reverb.as_ref().map(|r| r.impulse.clone()),
+            page.reverb.as_ref().map(|r| r.impulse.clone()),
+            "{} : même impulsion, donc mêmes tirages",
+            cfg.name
+        );
+        assert_eq!(
+            render_pad_with(cfg, &src, 42, &Shaping::default()),
+            render_pad(cfg, &src, 42)
+        );
+    }
+}
+
+#[test]
+fn full_fidelity_plays_the_sound_as_is_without_effects() {
+    let src = snapshot_source();
+    let sr = 44100.0;
+    for cfg in FLAVORS.iter() {
+        let p = plan_with(
+            cfg,
+            &src,
+            &mut Random::from_seed(42),
+            &Shaping::new(1.0, 0.0),
+        );
+        // sources : le transitoire (index 0) garde sa recette, les couches lisent à vitesse 1 depuis le début
+        for s in p.sources.iter().skip(1).take(cfg.layers.len()) {
+            match &s.rate {
+                Rate::Const(r) => check!(*r, 1.0),
+                Rate::Ramp { from, to, .. } => {
+                    check!(*from, 1.0);
+                    check!(*to, 1.0);
+                }
+            }
+            check!(s.offset, 0.0);
+            assert!(!s.reverse, "{} : plus de lecture inversée", cfg.name);
+            if let Some(f) = &s.filter {
+                match f.kind {
+                    FilterKind::Lowpass => check!(f.freq, sr * 0.45),
+                    FilterKind::Highpass => check!(f.freq, 30.0),
+                    FilterKind::Bandpass => check!(f.q, 0.25),
+                    _ => {}
+                }
+            }
+        }
+        if let Some(c) = &p.comb {
+            check!(c.mix, 0.0);
+        }
+        if let Some(r) = &p.reverb {
+            check!(r.wet, 0.0);
+        }
+        if let Some(b) = &p.bass {
+            check!(b.gain_db, 0.0);
+        }
+        if let Some(ph) = &p.phaser {
+            if let Some((_, depth)) = ph.lfo {
+                check!(depth, 0.0);
+            }
+        }
+        if cfg.sub.is_some() {
+            let sub = p.sources.last().unwrap();
+            assert!(
+                sub.env.iter().all(|v| *v == 0.0),
+                "{} : renfort grave muet",
+                cfg.name
+            );
+        }
+        check!(p.master.ratio, 1.0);
+        assert_eq!(p.crush, None, "{} : plus de bitcrush", cfg.name);
+        // les tables de saturation sont l'identité
+        for (i, v) in p.sat.drive1.iter().enumerate() {
+            let x = (i as f64 / 1023.0) * 2.0 - 1.0;
+            assert!(
+                (*v as f64 - x).abs() < 1e-6,
+                "{} : drive1[{i}] = {v} ≠ {x}",
+                cfg.name
+            );
+        }
+        assert!(p.sat.fold.as_ref().is_none_or(|f| {
+            f.iter()
+                .enumerate()
+                .all(|(i, v)| (*v as f64 - ((i as f64 / 1023.0) * 2.0 - 1.0)).abs() < 1e-6)
+        }));
+        let s = render_pad_with(cfg, &src, 42, &Shaping::new(1.0, 0.0));
+        assert!(s.data.iter().all(|v| v.is_finite()));
+        assert_ne!(
+            s.data,
+            render_pad(cfg, &src, 42).data,
+            "{} : le cadrage change le son",
+            cfg.name
+        );
+    }
+}
+
+#[test]
+fn half_fidelity_sits_between_the_page_and_the_source() {
+    let src = snapshot_source();
+    let page = plan(flavor("BOOM"), &src, &mut Random::from_seed(42));
+    let half = plan_with(
+        flavor("BOOM"),
+        &src,
+        &mut Random::from_seed(42),
+        &Shaping::new(0.5, 0.0),
+    );
+    fn start(r: &Rate) -> f64 {
+        match *r {
+            Rate::Const(v) => v,
+            Rate::Ramp { from, .. } => from,
+        }
+    }
+    let pf = start(&page.sources[1].rate);
+    assert!(pf != 1.0, "la première couche de BOOM est transposée");
+    check!(start(&half.sources[1].rate), (pf + 1.0) / 2.0);
+    check!(half.sources[1].offset, page.sources[1].offset * 0.5);
+    check!(
+        half.reverb.as_ref().unwrap().wet,
+        page.reverb.as_ref().unwrap().wet * 0.5
+    );
+}
+
+#[test]
+fn length_stretches_hold_and_decay_toward_the_source_duration() {
+    let src = snapshot_source(); // 0,5 s
+    for cfg in FLAVORS.iter() {
+        let page = plan(cfg, &src, &mut Random::from_seed(42));
+        let long = plan_with(
+            cfg,
+            &src,
+            &mut Random::from_seed(42),
+            &Shaping::new(0.0, 1.0),
+        );
+        let expected = src
+            .duration()
+            .max(page.timings.total)
+            .min(MAX_STRETCHED_TOTAL);
+        check!(long.timings.total, expected);
+        check!(long.timings.attack, page.timings.attack);
+        check!(long.timings.rev_tail, page.timings.rev_tail);
+        assert!(long.timings.length >= page.timings.length);
+        assert_eq!(long.sources.len(), page.sources.len());
+        let s = render_pad_with(cfg, &src, 42, &Shaping::new(0.0, 1.0));
+        assert_eq!(s.data.len(), long.timings.length, "{}", cfg.name);
+        let half = plan_with(
+            cfg,
+            &src,
+            &mut Random::from_seed(42),
+            &Shaping::new(0.0, 0.5),
+        );
+        check!(half.timings.total, (page.timings.total + expected) / 2.0);
+    }
+}
+
+#[test]
+fn shaping_is_clamped_to_the_unit_range() {
+    let s = Shaping::new(3.0, -1.0);
+    assert_eq!(s, Shaping::new(1.0, 0.0));
+    assert!(Shaping::default().is_default());
+    assert!(!Shaping::new(0.1, 0.0).is_default());
 }

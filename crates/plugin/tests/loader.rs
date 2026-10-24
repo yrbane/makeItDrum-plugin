@@ -181,6 +181,7 @@ fn replace_pad_builds_a_kit_from_scratch_and_embeds_it_in_the_state() {
 #[test]
 fn generate_from_path_builds_a_full_kit_embedded_in_the_state() {
     use make_it_drum::loader::{generate_from_path, regenerate};
+    use make_it_drum_core::render::Shaping;
     let dir = tmp();
     let wav = dir.join("Porte qui claque.wav");
     let spec = hound::WavSpec {
@@ -198,7 +199,7 @@ fn generate_from_path_builds_a_full_kit_embedded_in_the_state() {
     w.finalize().unwrap();
 
     let mut calls = 0;
-    let (kit, state) = generate_from_path(&wav, |_, _| calls += 1).unwrap();
+    let (kit, state) = generate_from_path(&wav, Shaping::default(), |_, _| calls += 1).unwrap();
     assert_eq!(calls, 20);
     assert_eq!(kit.name, "Porte qui claque");
     assert_eq!(kit.pads.len(), 20);
@@ -209,15 +210,56 @@ fn generate_from_path_builds_a_full_kit_embedded_in_the_state() {
     assert_eq!(restored.pads[11].sample, kit.pads[11].sample);
     assert!(restored.has_source(), "le son source est dans le preset");
 
-    let (varied, _) = regenerate(&restored, Some(2)).unwrap();
+    let (varied, _) = regenerate(&restored, Some(2), Shaping::default()).unwrap();
     assert_ne!(varied.pads[2].seed, restored.pads[2].seed);
     assert_eq!(varied.pads[3].sample, restored.pads[3].sample);
-    let (all, state2) = regenerate(&varied, None).unwrap();
+    let (all, state2) = regenerate(&varied, None, Shaping::default()).unwrap();
     assert!(all
         .pads
         .iter()
         .zip(&varied.pads)
         .all(|(a, b)| a.seed != b.seed));
     assert!(state2.zip_base64.is_some());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn reshape_keeps_seeds_and_embeds_the_shaping_in_the_state() {
+    use make_it_drum::loader::{generate_from_path, load_from_state, regenerate, reshape};
+    use make_it_drum_core::render::Shaping;
+    let dir = tmp();
+    std::fs::create_dir_all(&dir).unwrap();
+    let wav = dir.join("clap.wav");
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 22050,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut w = hound::WavWriter::create(&wav, spec).unwrap();
+    for i in 0..11025 {
+        let v = ((i as f32 * 0.05).sin() * 12000.0 * (1.0 - i as f32 / 11025.0)) as i16;
+        w.write_sample(v).unwrap();
+    }
+    w.finalize().unwrap();
+
+    let (kit, _) = generate_from_path(&wav, Shaping::new(0.3, 0.0), |_, _| {}).unwrap();
+    assert_eq!(kit.shaping, Shaping::new(0.3, 0.0));
+    let mut calls = 0;
+    let (shaped, state) = reshape(&kit, Shaping::new(1.0, 0.5), |_, _| calls += 1).unwrap();
+    assert_eq!(calls, 20);
+    assert_eq!(shaped.shaping, Shaping::new(1.0, 0.5));
+    assert!(shaped
+        .pads
+        .iter()
+        .zip(&kit.pads)
+        .all(|(a, b)| a.seed == b.seed && a.sample != b.sample));
+    let (restored, _) = load_from_state(&state).unwrap();
+    assert_eq!(restored.shaping, Shaping::new(1.0, 0.5));
+    assert_eq!(restored.pads[4].sample, shaped.pads[4].sample);
+
+    // regenerate adopte le cadrage demandé
+    let (varied, _) = regenerate(&restored, Some(1), Shaping::new(0.0, 0.0)).unwrap();
+    assert_eq!(varied.shaping, Shaping::default());
     std::fs::remove_dir_all(&dir).ok();
 }

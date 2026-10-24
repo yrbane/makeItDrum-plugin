@@ -24,9 +24,17 @@ porté en Rust ; le plugin lit aussi les kits exportés par la page.
    le clic sur la page. Le bouton **Nouvelles variations des 20 pads** refait tout le kit.
 5. **Glissez un son sur un pad** : ce pad seul prend ce son et son nom, et garde sa note.
    Les autres pads ne bougent pas.
-6. Le kit, ses graines et le son source sont embarqués dans le preset : le projet se
+6. **Fidélité** et **Durée**, les deux curseurs de la zone de dépôt, cadrent la génération
+   pour reconnaître plus ou moins le son d'avant. À 0 %, c'est la page telle quelle.
+   *Fidélité* ramène la hauteur vers celle de l'original, ouvre les filtres, atténue
+   saturation, comb, reverb, bitcrush et compression, lit depuis le début du son et
+   efface le renfort grave ; *Durée* étire palier et chute vers la durée du son (4 s au
+   plus). Relâcher un curseur rejoue les 20 pads **avec leurs graines** : même idée de
+   son, plus ou moins proche de l'original. Les réglages sont des paramètres du plugin
+   (automatisables) et sont mémorisés dans le kit.
+7. Le kit, ses graines et le son source sont embarqués dans le preset : le projet se
    rouvre sans les fichiers, et les variations restent possibles.
-7. Les kits exportés par la page (`.kit.zip`, ou l'ancien `makeitdrum_pack.zip`) se chargent
+8. Les kits exportés par la page (`.kit.zip`, ou l'ancien `makeitdrum_pack.zip`) se chargent
    aussi : déposez-les dans `~/Documents/makeitdrum/kits/` (ou le dossier de la variable
    `MAKEITDRUM_KITS`) pour la selectbox, collez un chemin, ou glissez le `.zip` sur la fenêtre.
    Une instance neuve charge le premier kit du dossier, s'il y en a un.
@@ -88,7 +96,7 @@ validé par `auval` en CI ; il n'a pas encore été ouvert dans Logic par un hum
 ## Développement
 
 ```bash
-cargo test --workspace                                   # 74 tests : golden audio, snapshots du moteur de la page
+cargo test --workspace                                   # 81 tests : golden audio, snapshots du moteur de la page
 cargo clippy --workspace --all-targets -- -D warnings
 cargo xtask bundle make-it-drum --release         # → target/bundled/
 cargo xtask bundle make-it-drum --release --target x86_64-pc-windows-gnu   # cross via mingw
@@ -107,7 +115,7 @@ les hôtes rechargent l'état correctement.
 
 Structure :
 
-- `crates/core` — cœur pur, sans hôte : `wav` (décodage WAV par hound, AIFF/MP3/FLAC/OGG/M4A par symphonia), `kit` (pack web, `kit.json`, dossier, mapping note → pad, génération, remplacement d'un pad, export `.kit.zip`), `voice` (one-shot interpolé), `engine` (20 voix, mixage). Le moteur porté de la page : `prng` (mulberry32), `analysis` (FFT, profil spectral), `curves` (tables de saturation, enveloppes), `flavors` (les 20 recettes), `dsp` (biquads Web Audio, retard, compresseur, convolution), `render` (`plan` tire les paramètres dans l'ordre de la page, `render` exécute le graphe). Tests dans `crates/core/tests/` : golden audio, valeurs de référence du JS (`pure.rs`), snapshots du renderer de la page pour la graine 42 (`render.rs`), fixture `tests/fixtures/source.wav` (celle de la page).
+- `crates/core` — cœur pur, sans hôte : `wav` (décodage WAV par hound, AIFF/MP3/FLAC/OGG/M4A par symphonia), `kit` (pack web, `kit.json`, dossier, mapping note → pad, génération, remplacement d'un pad, export `.kit.zip`), `voice` (one-shot interpolé), `engine` (20 voix, mixage). Le moteur porté de la page : `prng` (mulberry32), `analysis` (FFT, profil spectral), `curves` (tables de saturation, enveloppes), `flavors` (les 20 recettes), `dsp` (biquads Web Audio, retard, compresseur, convolution), `render` (`plan` tire les paramètres dans l'ordre de la page, `Shaping` les cadre après tirage sans changer l'ordre des tirages, `render` exécute le graphe). Tests dans `crates/core/tests/` : golden audio, valeurs de référence du JS (`pure.rs`), snapshots du renderer de la page pour la graine 42 (`render.rs`), fixture `tests/fixtures/source.wav` (celle de la page).
 - `crates/plugin` — nih-plug : `slot` (partage GUI / fond / audio sans blocage), `loader` (état persistant, dossier des kits), `params`, `editor` (egui), `lib` (le `Plugin`).
 - `xtask` — bundler nih-plug.
 - `au` — gabarit CMake de l'Audio Unit (clap-wrapper, CLAP embarqué).

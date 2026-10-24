@@ -22,7 +22,7 @@ use make_it_drum_core::kit::PAD_COUNT;
 
 use loader::{
     first_kit, generate_from_path, kits_dir, load_from_path, load_from_state, regenerate,
-    replace_pad,
+    replace_pad, reshape,
 };
 use params::KitPlayerParams;
 use slot::KitSlot;
@@ -37,6 +37,8 @@ pub enum Task {
     Generate(PathBuf),
     /// Nouvelle variation d'un pad, ou de tous (`None`), depuis le son source (GUI).
     Regenerate(Option<usize>),
+    /// Rejouer les pads générés avec leurs graines et les réglages Fidélité / Durée courants (GUI).
+    Reshape,
     /// Recharger le kit décrit par l'état persistant (ouverture de projet).
     Restore,
 }
@@ -91,8 +93,9 @@ impl Plugin for KitPlayer {
         Box::new(move |task| {
             let dropped = matches!(
                 task,
-                Task::DropSample { .. } | Task::Generate(_) | Task::Regenerate(_)
+                Task::DropSample { .. } | Task::Generate(_) | Task::Regenerate(_) | Task::Reshape
             );
+            let shaping = params.shaping();
             let result = match task {
                 Task::Generate(path) => {
                     let name = path
@@ -101,7 +104,7 @@ impl Plugin for KitPlayer {
                         .to_string_lossy()
                         .into_owned();
                     slot.set_status(format!("Analyse de {name}…"));
-                    generate_from_path(&path, |kit, i| {
+                    generate_from_path(&path, shaping, |kit, i| {
                         slot.set_status(format!("Génération {}/{PAD_COUNT} — {}", i + 1, name));
                         slot.publish(Arc::new(kit.clone()));
                     })
@@ -111,13 +114,31 @@ impl Plugin for KitPlayer {
                     })
                 }
                 Task::Regenerate(pad) => match slot.current() {
-                    Some(current) => regenerate(&current, pad).map(|(kit, state)| {
+                    Some(current) => regenerate(&current, pad, shaping).map(|(kit, state)| {
                         slot.set_status(match pad {
                             Some(i) => format!("Pad {} : nouvelle variation", i + 1),
                             None => "20 nouvelles variations".to_string(),
                         });
                         (kit, state)
                     }),
+                    None => Err(make_it_drum_core::kit::KitError::NoSource),
+                },
+                Task::Reshape => match slot.current() {
+                    Some(current) if current.shaping != shaping => {
+                        reshape(&current, shaping, |kit, i| {
+                            slot.set_status(format!("Rendu {}/{PAD_COUNT}", i + 1));
+                            slot.publish(Arc::new(kit.clone()));
+                        })
+                        .map(|(kit, state)| {
+                            slot.set_status(format!(
+                                "Fidélité {:.0} % · durée {:.0} %",
+                                shaping.fidelity * 100.0,
+                                shaping.length * 100.0
+                            ));
+                            (kit, state)
+                        })
+                    }
+                    Some(_) => return,
                     None => Err(make_it_drum_core::kit::KitError::NoSource),
                 },
                 Task::LoadPath(path) => load_from_path(&path),

@@ -3,7 +3,8 @@
 //! Glisser-déposer : un fichier audio (WAV, AIFF, MP3, FLAC, OGG) déposé
 //! hors des pads devient un kit de 20 percussions, comme sur la page ; déposé
 //! sur un pad, il remplace le son de ce pad. Un `.zip` ou un dossier
-//! remplace le kit. Clic droit sur un pad : nouvelle variation.
+//! remplace le kit. Clic droit sur un pad : nouvelle variation. Les curseurs
+//! Fidélité et Durée, relâchés, rejouent les pads générés avec leurs graines.
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,6 +26,8 @@ pub const PROJECT_URL: &str = "https://github.com/yrbane/makeItDrum-plugin";
 struct EditorState {
     kits: Vec<PathBuf>,
     path_input: String,
+    /// Le cadrage déjà demandé au moteur ; un écart, curseur relâché, relance le rendu.
+    shaping_sent: Option<make_it_drum_core::render::Shaping>,
 }
 
 impl EditorState {
@@ -32,6 +35,7 @@ impl EditorState {
         Self {
             kits: scan_kits(&kits_dir()),
             path_input: String::new(),
+            shaping_sent: None,
         }
     }
 }
@@ -143,6 +147,14 @@ pub fn create(
                                 .small()
                                 .weak(),
                             );
+                            ui.horizontal(|ui| {
+                                ui.label("Fidélité")
+                                    .on_hover_text("0 % : la page. 100 % : le son d'origine, presque tel quel");
+                                ui.add(widgets::ParamSlider::for_param(&params.fidelity, setter));
+                                ui.label("Durée")
+                                    .on_hover_text("0 % : des percussions. 100 % : étirées vers la durée du son");
+                                ui.add(widgets::ParamSlider::for_param(&params.length, setter));
+                            });
                             if has_source
                                 && ui
                                     .button("Nouvelles variations des 20 pads")
@@ -153,6 +165,17 @@ pub fn create(
                             }
                         });
                     });
+                // curseurs relâchés et cadrage changé : rejouer les pads avec leurs graines
+                let shaping = params.shaping();
+                let pointer_down = ctx.input(|i| i.pointer.any_down());
+                if state.shaping_sent.is_none() {
+                    state.shaping_sent = Some(shaping);
+                } else if !pointer_down && state.shaping_sent != Some(shaping) {
+                    state.shaping_sent = Some(shaping);
+                    if has_source {
+                        async_executor.execute_background(Task::Reshape);
+                    }
+                }
                 let _ = zone;
                 ui.add_space(6.0);
 

@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use base64::Engine as _;
 use make_it_drum_core::kit::{Kit, KitError};
+use make_it_drum_core::render::Shaping;
 use make_it_drum_core::wav::decode_audio;
 use serde::{Deserialize, Serialize};
 
@@ -56,9 +57,10 @@ pub fn read_audio(path: &Path) -> Result<make_it_drum_core::wav::Sample, KitErro
 }
 
 /// Fabrique un kit de 20 percussions à partir du fichier audio `path`, comme
-/// la page. `progress` reçoit le kit après chaque pad rendu.
+/// la page, cadré par `shaping`. `progress` reçoit le kit après chaque pad rendu.
 pub fn generate_from_path(
     path: &Path,
+    shaping: Shaping,
     progress: impl FnMut(&Kit, usize),
 ) -> Result<(Arc<Kit>, KitState), KitError> {
     let sample = read_audio(path)?;
@@ -66,14 +68,33 @@ pub fn generate_from_path(
         .file_stem()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "kit".to_string());
-    let kit = Kit::generate(&name, &sample, None, progress)?;
+    let kit = Kit::generate_with(&name, &sample, None, shaping, progress)?;
     let state = state_for(&kit)?;
     Ok((Arc::new(kit), state))
 }
 
-/// Nouvelle variation d'un pad (ou de tous si `pad` est `None`) du kit courant.
-pub fn regenerate(current: &Kit, pad: Option<usize>) -> Result<(Arc<Kit>, KitState), KitError> {
+/// Rejoue les pads générés du kit courant avec leurs graines et le cadrage
+/// `shaping` : même idée de son, plus ou moins proche de l'original.
+pub fn reshape(
+    current: &Kit,
+    shaping: Shaping,
+    progress: impl FnMut(&Kit, usize),
+) -> Result<(Arc<Kit>, KitState), KitError> {
     let mut kit = current.clone();
+    kit.reshape(shaping, progress)?;
+    let state = state_for(&kit)?;
+    Ok((Arc::new(kit), state))
+}
+
+/// Nouvelle variation d'un pad (ou de tous si `pad` est `None`) du kit courant,
+/// avec le cadrage `shaping`.
+pub fn regenerate(
+    current: &Kit,
+    pad: Option<usize>,
+    shaping: Shaping,
+) -> Result<(Arc<Kit>, KitState), KitError> {
+    let mut kit = current.clone();
+    kit.shaping = shaping;
     match pad {
         Some(i) => kit.regenerate_pad(i, None)?,
         None => {

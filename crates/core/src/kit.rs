@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::flavors::{flavor_at, FLAVORS as RECIPES};
 use crate::prng::fresh_seed;
-use crate::render::{render_pad, SourceSample};
+use crate::render::{render_pad_with, Shaping, SourceSample};
 use crate::wav::{decode_wav, Sample};
 
 pub const PAD_COUNT: usize = 20;
@@ -96,6 +96,8 @@ pub struct Kit {
     pub pads: Vec<Pad>,
     /// Le son importé dont les pads sont tirés, mono ; permet de régénérer.
     pub source: Option<Sample>,
+    /// Le cadrage (fidélité, durée) avec lequel les pads générés ont été rendus.
+    pub shaping: Shaping,
 }
 
 /// Nom d'entrée du son source dans un `.kit.zip` écrit par le plugin.
@@ -109,7 +111,16 @@ struct Manifest {
     app: &'static str,
     name: Option<String>,
     source: Option<ManifestSource>,
+    /// Cadrage de la génération (plugin) ; absent dans les packs de la page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    shaping: Option<ManifestShaping>,
     pads: Vec<ManifestPad>,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+struct ManifestShaping {
+    fidelity: f64,
+    length: f64,
 }
 
 /// Le son source : les métadonnées de la page, plus `file` quand le plugin
@@ -221,10 +232,15 @@ impl Kit {
                 )?)?),
                 None => None,
             };
+            let shaping = manifest
+                .shaping
+                .map(|s| Shaping::new(s.fidelity, s.length))
+                .unwrap_or_default();
             return Ok(Kit {
                 name: manifest.name.unwrap_or_else(|| name.to_string()),
                 pads: normalize(pads),
                 source,
+                shaping,
             });
         }
         let mut wavs: Vec<String> = names.into_iter().filter(|n| is_wav(n)).collect();
@@ -247,6 +263,7 @@ impl Kit {
             name: name.to_string(),
             pads,
             source: None,
+            shaping: Shaping::default(),
         })
     }
 
@@ -289,6 +306,7 @@ impl Kit {
             name,
             pads,
             source: None,
+            shaping: Shaping::default(),
         })
     }
 
@@ -315,6 +333,7 @@ impl Kit {
             name: name.to_string(),
             pads: Vec::new(),
             source: None,
+            shaping: Shaping::default(),
         }
     }
 
@@ -325,6 +344,17 @@ impl Kit {
         name: &str,
         source: &Sample,
         seeds: Option<&[u32]>,
+        progress: impl FnMut(&Kit, usize),
+    ) -> Result<Kit, KitError> {
+        Self::generate_with(name, source, seeds, Shaping::default(), progress)
+    }
+
+    /// Comme `generate`, cadré par `shaping` (fidélité au son, durée).
+    pub fn generate_with(
+        name: &str,
+        source: &Sample,
+        seeds: Option<&[u32]>,
+        shaping: Shaping,
         mut progress: impl FnMut(&Kit, usize),
     ) -> Result<Kit, KitError> {
         if source.frames() == 0 {
@@ -335,6 +365,7 @@ impl Kit {
             name: name.to_string(),
             pads: Vec::with_capacity(PAD_COUNT),
             source: Some(src.to_sample()),
+            shaping,
         };
         for (index, flavor) in RECIPES.iter().enumerate() {
             let seed = seeds
@@ -344,7 +375,7 @@ impl Kit {
                 index,
                 label: flavor.name.to_string(),
                 note: BASE_NOTE + index as u8,
-                sample: render_pad(flavor, &src, seed),
+                sample: render_pad_with(flavor, &src, seed, &shaping),
                 seed: Some(seed),
             });
             progress(&kit, index);
@@ -362,7 +393,7 @@ impl Kit {
         let src = SourceSample::prepare(source);
         let seed = seed.unwrap_or_else(fresh_seed);
         let flavor = flavor_at(index);
-        let sample = render_pad(flavor, &src, seed);
+        let sample = render_pad_with(flavor, &src, seed, &self.shaping);
         while self.pads.len() <= index {
             self.pads.push(Pad::empty(self.pads.len()));
         }
@@ -372,6 +403,28 @@ impl Kit {
         }
         pad.sample = sample;
         pad.seed = Some(seed);
+        Ok(())
+    }
+
+    /// Change le cadrage et rejoue, avec leur graine, tous les pads générés :
+    /// même « idée » de son, plus ou moins proche de l'original. Les pads
+    /// déposés à la main (sans graine) ne bougent pas. `progress` est appelé
+    /// après chaque pad rendu.
+    pub fn reshape(
+        &mut self,
+        shaping: Shaping,
+        mut progress: impl FnMut(&Kit, usize),
+    ) -> Result<(), KitError> {
+        let source = self.source.as_ref().ok_or(KitError::NoSource)?;
+        let src = SourceSample::prepare(source);
+        self.shaping = shaping;
+        for index in 0..self.pads.len() {
+            let Some(seed) = self.pads[index].seed else {
+                continue;
+            };
+            self.pads[index].sample = render_pad_with(flavor_at(index), &src, seed, &shaping);
+            progress(self, index);
+        }
         Ok(())
     }
 
@@ -466,6 +519,10 @@ impl Kit {
             app: "make-it-drum",
             name: Some(self.name.clone()),
             source,
+            shaping: (!self.shaping.is_default()).then_some(ManifestShaping {
+                fidelity: self.shaping.fidelity,
+                length: self.shaping.length,
+            }),
             pads: manifest_pads,
         };
         let json =

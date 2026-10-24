@@ -162,11 +162,73 @@ pub struct PadPlan {
     pub peak: f64,
 }
 
+/// Les deux réglages qui cadrent la génération, en plus de la recette :
+/// `fidelity` (0 à 1) rapproche chaque pad du son d'origine (hauteur vers 1,
+/// filtres ouverts, saturation, comb, reverb, bitcrush et compression atténués,
+/// lecture depuis le début) ; `length` (0 à 1) étire palier et chute vers la
+/// durée du son (au plus `MAX_STRETCHED_TOTAL` s). À zéro : la page, telle quelle.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Shaping {
+    pub fidelity: f64,
+    pub length: f64,
+}
+
+impl Default for Shaping {
+    fn default() -> Self {
+        Self {
+            fidelity: 0.0,
+            length: 0.0,
+        }
+    }
+}
+
+impl Shaping {
+    pub fn new(fidelity: f64, length: f64) -> Self {
+        Self {
+            fidelity: clamp(fidelity, 0.0, 1.0),
+            length: clamp(length, 0.0, 1.0),
+        }
+    }
+
+    pub fn is_default(&self) -> bool {
+        self.fidelity == 0.0 && self.length == 0.0
+    }
+}
+
+/// Durée maximale (attaque + palier + chute) qu'atteint `length` = 1.
+pub const MAX_STRETCHED_TOTAL: f64 = 4.0;
+
+#[inline]
+fn lerp(a: f64, b: f64, t: f64) -> f64 {
+    a + (b - a) * t
+}
+
+/// Mélange une table de WaveShaper avec l'identité : `t` = 1 ne déforme plus.
+fn blend_identity(curve: &mut [f32], t: f64) {
+    if t <= 0.0 {
+        return;
+    }
+    let n = curve.len();
+    for (i, v) in curve.iter_mut().enumerate() {
+        let x = (i as f64 / (n - 1).max(1) as f64) * 2.0 - 1.0;
+        *v = lerp(*v as f64, x, t) as f32;
+    }
+}
+
+/// Rapproche un filtre de couche de la transparence.
+fn open_filter(f: &mut FilterSpec, sr: f64, t: f64) {
+    match f.kind {
+        FilterKind::Lowpass => f.freq = lerp(f.freq, sr * 0.45, t),
+        FilterKind::Highpass => f.freq = lerp(f.freq, 30.0, t),
+        FilterKind::Bandpass => f.q = lerp(f.q, 0.25, t),
+        _ => {}
+    }
+}
+
 fn timings(cfg: &Flavor, sr: f64, rng: &mut Random) -> Timings {
     let attack = cfg.attack;
     let hold = rng.jitter(cfg.hold, 0.3);
     let decay = rng.jitter(cfg.decay, 0.25);
-    let total = attack + hold + decay;
     let rev_tail = if cfg.rev_tail != 0.0 {
         rng.jitter(cfg.rev_tail, 0.3)
     } else {
@@ -178,25 +240,55 @@ fn timings(cfg: &Flavor, sr: f64, rng: &mut Random) -> Timings {
         } else {
             0.0
         } + if cfg.comb.is_some() { 0.08 } else { 0.0 };
-    let length = (((total + rev_tail + tail_pad) * sr).ceil() as usize).max(2);
-    Timings {
-        sr,
-        attack,
-        hold,
-        decay,
-        total,
-        rev_tail,
-        tail_pad,
-        length,
+    Timings::finish(sr, attack, hold, decay, rev_tail, tail_pad)
+}
+
+impl Timings {
+    fn finish(sr: f64, attack: f64, hold: f64, decay: f64, rev_tail: f64, tail_pad: f64) -> Self {
+        let total = attack + hold + decay;
+        let length = (((total + rev_tail + tail_pad) * sr).ceil() as usize).max(2);
+        Timings {
+            sr,
+            attack,
+            hold,
+            decay,
+            total,
+            rev_tail,
+            tail_pad,
+            length,
+        }
+    }
+
+    /// Étire palier et chute vers la durée du son, selon `length`.
+    fn stretched(&self, duration: f64, length: f64) -> Self {
+        let target = clamp(duration, self.total, MAX_STRETCHED_TOTAL).max(self.total);
+        let body = (self.hold + self.decay).max(1e-6);
+        let factor = lerp(1.0, (target - self.attack).max(0.0) / body, length);
+        Timings::finish(
+            self.sr,
+            self.attack,
+            self.hold * factor,
+            self.decay * factor,
+            self.rev_tail,
+            self.tail_pad,
+        )
     }
 }
 
 /// Tire tous les paramètres du rendu, dans l'ordre des tirages de la page.
 pub fn plan(cfg: &Flavor, src: &SourceSample, rng: &mut Random) -> PadPlan {
+    plan_with(cfg, src, rng, &Shaping::default())
+}
+
+/// Comme `plan`, cadré par `shaping`. Les tirages restent ceux de la page,
+/// dans le même ordre : une graine donne la même « idée » de son quel que
+/// soit le cadrage, seul le résultat est rapproché du son d'origine.
+pub fn plan_with(cfg: &Flavor, src: &SourceSample, rng: &mut Random, shaping: &Shaping) -> PadPlan {
     let a = &src.analysis;
     let sr = src.sample_rate as f64;
     let duration = src.duration();
-    let t = timings(cfg, sr, rng);
+    let f = clamp(shaping.fidelity, 0.0, 1.0);
+    let t = timings(cfg, sr, rng).stretched(duration, clamp(shaping.length, 0.0, 1.0));
     let mut sources = Vec::new();
 
     // transitoire d'attaque : le tout début du sample, passe-haut et saturé
@@ -239,26 +331,33 @@ pub fn plan(cfg: &Flavor, src: &SourceSample, rng: &mut Random) -> PadPlan {
                 let dur = rng.jitter(pb.dur.unwrap_or(t.total * 0.6), 0.3);
                 let from = rng.jitter(pb.from, 0.15);
                 let to = rng.jitter(pb.to, 0.15);
-                Rate::Ramp { from, to, dur }
+                Rate::Ramp {
+                    from: lerp(from, 1.0, f),
+                    to: lerp(to, 1.0, f),
+                    dur,
+                }
             }
-            None => Rate::Const(rng.jitter(layer.rate, 0.15)),
+            None => Rate::Const(lerp(rng.jitter(layer.rate, 0.15), 1.0, f)),
         };
         let filter = layer.filter.map(|kind| {
             let freq = clamp(rng.jitter((layer.freq)(a), 0.22), 30.0, sr * 0.45);
             let q = rng.jitter(layer.q, 0.3);
-            FilterSpec {
+            let mut spec = FilterSpec {
                 kind,
                 freq,
                 q,
                 gain_db: 0.0,
-            }
+            };
+            open_filter(&mut spec, sr, f);
+            spec
         });
         let hold_l = t.hold * layer.hold_mul;
         let decay_l = t.decay * layer.decay_mul;
         let env = scaled_env(t.attack, hold_l, decay_l, cfg.curve_pow, layer.gain);
-        let offset = rng.random_offset(duration, layer.offset_max);
+        let offset = rng.random_offset(duration, layer.offset_max) * (1.0 - f);
         sources.push(SourcePlan {
-            reverse: layer.reverse,
+            // à forte fidélité, on n'inverse plus la lecture
+            reverse: layer.reverse && f < 0.75,
             rate,
             filter,
             shaper: None,
@@ -270,12 +369,20 @@ pub fn plan(cfg: &Flavor, src: &SourceSample, rng: &mut Random) -> PadPlan {
 
     // renfort de basses : copie passe-bas saturée
     if let Some(sub) = cfg.sub {
-        let rate = rng.jitter(sub.rate, 0.15);
+        // à forte fidélité, le renfort grave s'efface (vitesse vers 1, gain vers 0)
+        let rate = lerp(rng.jitter(sub.rate, 0.15), 1.0, f);
         let freq = clamp(rng.jitter((sub.cutoff)(a), 0.2), 35.0, 220.0);
-        let shaper = sat_curve(rng.jitter(sub.drive, 0.2), 0.32);
+        let mut shaper = sat_curve(rng.jitter(sub.drive, 0.2), 0.32);
+        blend_identity(&mut shaper, f);
         let decay_l = t.decay * sub.decay_mul;
-        let env = scaled_env(t.attack, t.hold, decay_l, cfg.curve_pow, sub.gain);
-        let offset = rng.random_offset(duration, 0.7);
+        let env = scaled_env(
+            t.attack,
+            t.hold,
+            decay_l,
+            cfg.curve_pow,
+            sub.gain * (1.0 - f),
+        );
+        let offset = rng.random_offset(duration, 0.7) * (1.0 - f);
         sources.push(SourcePlan {
             reverse: false,
             rate: Rate::Const(rate),
@@ -295,7 +402,7 @@ pub fn plan(cfg: &Flavor, src: &SourceSample, rng: &mut Random) -> PadPlan {
     let phaser = cfg.phaser.filter(|p| p.stages > 0).map(|ph| {
         let lfo = ph.sweep.then(|| {
             let rate = rng.jitter(ph.sweep_rate, 0.3);
-            let depth = rng.jitter(ph.spread * 0.5, 0.3);
+            let depth = rng.jitter(ph.spread * 0.5, 0.3) * (1.0 - f);
             (rate, depth)
         });
         let stages = (0..ph.stages)
@@ -315,7 +422,7 @@ pub fn plan(cfg: &Flavor, src: &SourceSample, rng: &mut Random) -> PadPlan {
     let comb = cfg.comb.map(|c| {
         let delay = rng.jitter(c.delay_ms / 1000.0, 0.3);
         let feedback = rng.jitter(c.feedback, 0.3);
-        let mix = (if c.invert { -1.0 } else { 1.0 }) * rng.jitter(c.mix, 0.3);
+        let mix = (if c.invert { -1.0 } else { 1.0 }) * rng.jitter(c.mix, 0.3) * (1.0 - f);
         CombPlan {
             delay,
             feedback,
@@ -324,10 +431,15 @@ pub fn plan(cfg: &Flavor, src: &SourceSample, rng: &mut Random) -> PadPlan {
     });
 
     let sat = {
-        let drive1 = sat_curve(rng.jitter(cfg.sat.drive1, 0.22), cfg.sat.asym1);
-        let fold =
+        let mut drive1 = sat_curve(rng.jitter(cfg.sat.drive1, 0.22), cfg.sat.asym1);
+        let mut fold =
             (cfg.sat.fold_amt != 0.0).then(|| fold_curve(rng.jitter(cfg.sat.fold_amt, 0.25)));
-        let drive2 = sat_curve(rng.jitter(cfg.sat.drive2, 0.22), cfg.sat.asym2);
+        let mut drive2 = sat_curve(rng.jitter(cfg.sat.drive2, 0.22), cfg.sat.asym2);
+        blend_identity(&mut drive1, f);
+        if let Some(c) = fold.as_mut() {
+            blend_identity(c, f);
+        }
+        blend_identity(&mut drive2, f);
         SatPlan {
             drive1,
             fold,
@@ -337,7 +449,7 @@ pub fn plan(cfg: &Flavor, src: &SourceSample, rng: &mut Random) -> PadPlan {
 
     let bass = cfg.bass_boost.map(|b| {
         let freq = rng.jitter(b.freq, 0.2);
-        let gain_db = rng.jitter(b.db, 0.2);
+        let gain_db = rng.jitter(b.db, 0.2) * (1.0 - f);
         FilterSpec {
             kind: FilterKind::Peaking,
             freq,
@@ -354,12 +466,12 @@ pub fn plan(cfg: &Flavor, src: &SourceSample, rng: &mut Random) -> PadPlan {
                 ((rng.random() * 2.0 - 1.0) * (1.0 - i as f64 / len as f64).powf(decay)) as f32
             })
             .collect();
-        let wet = rng.jitter(cfg.rev_wet, 0.3);
+        let wet = rng.jitter(cfg.rev_wet, 0.3) * (1.0 - f);
         ReverbPlan { impulse, wet }
     });
 
     let out_gain = rng.jitter(cfg.out_gain, 0.15);
-    let ratio = rng.jitter(9.0, 0.2);
+    let ratio = lerp(rng.jitter(9.0, 0.2), 1.0, f);
     let release = rng.jitter(0.09, 0.3);
     let master = MasterPlan {
         out_gain,
@@ -368,7 +480,11 @@ pub fn plan(cfg: &Flavor, src: &SourceSample, rng: &mut Random) -> PadPlan {
     };
 
     let crush = match cfg.crush {
-        Some(c) if rng.chance(c.chance) && rng.chance(1.0) => Some((c.bits, c.hold)),
+        Some(c) if rng.chance(c.chance) && rng.chance(1.0) => {
+            let bits = lerp(c.bits as f64, 16.0, f).round() as u32;
+            let hold = lerp(c.hold as f64, 1.0, f).round() as u32;
+            (bits < 16 || hold > 1).then_some((bits, hold))
+        }
         _ => None,
     };
 
@@ -520,8 +636,13 @@ pub fn render(plan: &PadPlan, src: &SourceSample) -> Vec<f32> {
 
 /// Rend une percussion : la recette `cfg` appliquée au son, pour une graine.
 pub fn render_pad(cfg: &Flavor, src: &SourceSample, seed: u32) -> Sample {
+    render_pad_with(cfg, src, seed, &Shaping::default())
+}
+
+/// Comme `render_pad`, cadré par `shaping`.
+pub fn render_pad_with(cfg: &Flavor, src: &SourceSample, seed: u32, shaping: &Shaping) -> Sample {
     let mut rng = Random::from_seed(seed);
-    let p = plan(cfg, src, &mut rng);
+    let p = plan_with(cfg, src, &mut rng, shaping);
     Sample {
         data: render(&p, src),
         channels: 1,
