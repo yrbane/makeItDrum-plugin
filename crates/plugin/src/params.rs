@@ -25,10 +25,6 @@ pub struct KitPlayerParams {
     #[id = "start"]
     pub start: FloatParam,
 
-    /// Frappes : sons joués à tour de rôle par pad (1 à 4).
-    #[id = "round_robin"]
-    pub round_robin: IntParam,
-
     /// Mode mélodique : un pad joué sur tout le clavier, transposé.
     #[id = "melodic"]
     pub melodic: BoolParam,
@@ -72,14 +68,6 @@ impl Default for KitPlayerParams {
                 .with_unit(" %")
                 .with_value_to_string(formatters::v2s_f32_percentage(0))
                 .with_string_to_value(formatters::s2v_f32_percentage()),
-            round_robin: IntParam::new(
-                "Frappes",
-                1,
-                IntRange::Linear {
-                    min: 1,
-                    max: make_it_drum_core::kit::MAX_ROUND_ROBIN as i32,
-                },
-            ),
             melodic: BoolParam::new("Mode mélodique", false),
             melodic_pad: IntParam::new(
                 "Pad mélodique",

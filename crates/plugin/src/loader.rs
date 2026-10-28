@@ -251,3 +251,33 @@ pub fn display_name(path: &Path) -> String {
         .unwrap_or(&base)
         .to_string()
 }
+
+/// Les graines du kit, pad par pad (`None` : pad vide ou son déposé).
+pub fn seeds_of(kit: &Kit) -> Vec<Option<u32>> {
+    (0..make_it_drum_core::kit::PAD_COUNT)
+        .map(|i| kit.pads.get(i).and_then(|p| p.seed))
+        .collect()
+}
+
+/// Rejoue les pads générés du kit courant avec les graines d'une série
+/// précédente (les pads déposés à la main ne bougent pas), avec le cadrage
+/// `shaping`.
+pub fn regenerate_with_seeds(
+    current: &Kit,
+    seeds: &[Option<u32>],
+    shaping: Shaping,
+    progress: impl FnMut(&Kit, usize),
+) -> Result<(Arc<Kit>, KitState), KitError> {
+    let mut kit = current.clone();
+    for (pad, seed) in kit.pads.iter_mut().zip(seeds) {
+        if let (Some(_), Some(s)) = (pad.seed, seed) {
+            pad.seed = Some(*s);
+            for (k, alt) in pad.alternates.iter_mut().enumerate() {
+                alt.0 = make_it_drum_core::kit::Pad::alternate_seed(*s, k + 1);
+            }
+        }
+    }
+    kit.reshape(shaping, progress)?;
+    let state = state_for(&kit)?;
+    Ok((Arc::new(kit), state))
+}

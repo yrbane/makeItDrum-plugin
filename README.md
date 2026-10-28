@@ -20,11 +20,12 @@ porté en Rust ; le plugin lit aussi les kits exportés par la page.
    les 20 pads se remplissent : BOOM, KICK, THUD, … CHAOS, les 20 recettes de la page.
 3. Jouez : pad 1 = note 36 (C1), pad 2 = 37, … pad 20 = 55. Un clic sur un pad le
    déclenche aussi, et le sélectionne : le panneau de droite règle **gain, hauteur,
-   panoramique, chute, sens de lecture, groupe d'étouffement** (les pads d'un même groupe
-   se coupent, charley ouvert / fermé) et **verrou**. La vélocité MIDI est prise en compte.
-   Le nom du pad se modifie dans le panneau.
+   chute** et **sens de lecture**. La vélocité MIDI est prise en compte. Le nom du pad se
+   modifie dans le panneau.
 4. **Clic droit sur un pad** : nouvelle variation de cette recette (nouvelle graine), comme
-   le clic sur la page. Le bouton **Nouvelles variations des 20 pads** refait tout le kit.
+   le clic sur la page. Le bouton **Nouvelles variations** refait tout le kit. Chaque série
+   de variations est mémorisée : **⏴** et **⏵** y reviennent (compteur « 3/7 »), et une
+   nouvelle série après un retour en arrière remplace ce qui suivait.
 5. **Glissez un son sur un pad** : ce pad seul prend ce son et son nom, et garde sa note.
    Les autres pads ne bougent pas.
 6. **Fidélité**, **Durée** et **Départ** cadrent la génération pour reconnaître plus ou
@@ -34,22 +35,21 @@ porté en Rust ; le plugin lit aussi les kits exportés par la page.
    *Durée* étire palier et chute vers la durée du son (4 s au plus) ; *Départ* choisit où
    commence le son source, et **Au transitoire** le place juste avant l'attaque la plus
    forte. Relâcher un curseur rejoue les pads générés **avec leurs graines** : même idée
-   de son, plus ou moins proche de l'original. Les pads verrouillés ne bougent pas. Les
-   réglages sont des paramètres du plugin (automatisables) et sont mémorisés dans le kit.
-7. **Frappes** (1 à 4) : chaque pad généré reçoit des variantes jouées à tour de rôle, pour
-   que les répétitions ne sonnent pas « mitraillette ». **Mélodique** : un seul pad joué sur
-   tout le clavier, transposé (do médian = tel quel), pour une basse ou une ligne.
+   de son, plus ou moins proche de l'original. Les réglages sont des paramètres du plugin
+   (automatisables) et sont mémorisés dans le kit.
+7. **Mélodique** : un seul pad joué sur tout le clavier, transposé (do médian = tel quel),
+   pour une basse ou une ligne.
 8. **Annuler** revient au kit précédent (8 niveaux). **Enregistrer** écrit le kit en
    `.kit.zip` dans le dossier des kits ; **Exporter** produit un dossier de WAV (à glisser
    d'un coup sur un Drum Rack de Live : les pads se remplissent à la suite) ou un
-   **Drum Rack de Live** (`.adg` + WAV, notes et groupes d'étouffement repris), dans
+   **Drum Rack de Live** (`.adg` + WAV, notes reprises), dans
    `~/Documents/makeitdrum/exports/` (ou `MAKEITDRUM_EXPORTS`). L'export `.adg` est
    construit à partir d'un gabarit de Live 12 ; il n'a pas encore été ouvert dans Live
    par un humain.
 9. **Capturer** : le plugin a une entrée audio « Capture » (sidechain). Dans Live, choisissez
    la source dans le panneau du plugin (« Audio From »), cliquez **● Capturer**, faites du
    bruit : le kit se fabrique à partir de l'enregistrement, sans fichier.
-10. Le kit, ses graines, le son source, les réglages de pads et les variantes sont embarqués dans le preset : le projet se
+10. Le kit, ses graines, le son source et les réglages de pads sont embarqués dans le preset : le projet se
    rouvre sans les fichiers, et les variations restent possibles.
 11. Les kits exportés par la page (`.kit.zip`, ou l'ancien `makeitdrum_pack.zip`) se chargent
    aussi : déposez-les dans `~/Documents/makeitdrum/kits/` (ou le dossier de la variable
@@ -113,7 +113,7 @@ validé par `auval` en CI ; il n'a pas encore été ouvert dans Logic par un hum
 ## Développement
 
 ```bash
-cargo test --workspace                                   # 102 tests : golden audio, snapshots du moteur de la page
+cargo test --workspace                                   # 109 tests : golden audio, snapshots du moteur de la page
 cargo clippy --workspace --all-targets -- -D warnings
 cargo xtask bundle make-it-drum --release         # → target/bundled/
 cargo xtask bundle make-it-drum --release --target x86_64-pc-windows-gnu   # cross via mingw
@@ -135,7 +135,7 @@ les hôtes rechargent l'état correctement.
 Structure :
 
 - `crates/core` — cœur pur, sans hôte : `wav` (décodage WAV par hound, AIFF/MP3/FLAC/OGG/M4A par symphonia), `kit` (pack web, `kit.json`, dossier, mapping note → pad, génération, remplacement d'un pad, export `.kit.zip`), `voice` (one-shot interpolé), `engine` (20 voix, mixage). Le moteur porté de la page : `prng` (mulberry32), `analysis` (FFT, profil spectral), `curves` (tables de saturation, enveloppes), `flavors` (les 20 recettes), `dsp` (biquads Web Audio, retard, compresseur, convolution), `render` (`plan` tire les paramètres dans l'ordre de la page, `Shaping` les cadre après tirage sans changer l'ordre des tirages, `render` exécute le graphe). Tests dans `crates/core/tests/` : golden audio, valeurs de référence du JS (`pure.rs`), snapshots du renderer de la page pour la graine 42 (`render.rs`), fixture `tests/fixtures/source.wav` (celle de la page).
-- `crates/plugin` — nih-plug : `slot` (partage GUI / fond / audio sans blocage), `loader` (état persistant, dossier des kits), `params`, `editor` (egui, dans l'esprit de la page : panneau beige, pads à écran LCD avec la forme d'onde), `history` (annuler), `capture` (enregistrement depuis l'entrée auxiliaire, sans blocage du thread audio), `export` (`.kit.zip`, WAV, Drum Rack `.adg` depuis les gabarits de `templates/`), `lib` (le `Plugin`).
+- `crates/plugin` — nih-plug : `slot` (partage GUI / fond / audio sans blocage), `loader` (état persistant, dossier des kits), `params`, `editor` (egui, dans l'esprit de la page : panneau beige, pads à écran LCD avec la forme d'onde), `history` (annuler), `variations` (séries de graines, ⏴ ⏵), `capture` (enregistrement depuis l'entrée auxiliaire, sans blocage du thread audio), `export` (`.kit.zip`, WAV, Drum Rack `.adg` depuis les gabarits de `templates/`), `lib` (le `Plugin`).
 - `xtask` — bundler nih-plug.
 - `au` — gabarit CMake de l'Audio Unit (clap-wrapper, CLAP embarqué).
 - `vendor/baseview` — copie de la révision épinglée, avec les types de pasteboard que Live utilise pour ses fichiers (liste de chemins et `public.file-url`) et la réponse `Copy | Generic` au survol ; sans lui, Live n'autorise pas le dépôt.

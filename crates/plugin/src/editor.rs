@@ -15,7 +15,7 @@ use std::time::Duration;
 use nih_plug::prelude::*;
 use nih_plug_egui::{create_egui_editor, egui, widgets};
 
-use make_it_drum_core::kit::{Kit, Pad, PadSettings, MAX_ROUND_ROBIN, PAD_COUNT};
+use make_it_drum_core::kit::{Kit, Pad, PadSettings, PAD_COUNT};
 use make_it_drum_core::render::Shaping;
 use make_it_drum_core::wav::{is_audio_file, Sample};
 
@@ -24,6 +24,7 @@ use crate::history::History;
 use crate::loader::{display_name, exports_dir, kits_dir, scan_kits};
 use crate::params::KitPlayerParams;
 use crate::slot::KitSlot;
+use crate::variations::Variations;
 use crate::{KitPlayer, Task};
 
 pub const CREDIT_URL: &str = "https://beacons.ai/saiyageez";
@@ -125,7 +126,6 @@ pub struct EditorState {
     save_name_for: String,
     /// Le cadrage déjà demandé au moteur ; un écart, curseur relâché, relance le rendu.
     shaping_sent: Option<Shaping>,
-    round_robin_sent: Option<usize>,
     selected: Option<usize>,
     rename: Option<(usize, String)>,
     /// Réglages en cours d'édition (pad, valeurs) tant que le curseur est tenu.
@@ -150,7 +150,6 @@ impl EditorState {
             save_name: String::new(),
             save_name_for: String::new(),
             shaping_sent: None,
-            round_robin_sent: None,
             selected: None,
             rename: None,
             editing: None,
@@ -378,12 +377,6 @@ fn draw_pad(ui: &mut egui::Ui, look: PadLook) -> egui::Response {
     );
     if let Some(p) = look.pad {
         let mut badges = String::new();
-        if p.settings.locked {
-            badges.push('🔒');
-        }
-        if p.variant_count() > 1 {
-            badges.push_str(&format!("×{}", p.variant_count()));
-        }
         if p.settings.reverse {
             badges.push('⏴');
         }
@@ -450,6 +443,7 @@ pub fn create(
     slot: Arc<KitSlot>,
     history: Arc<History>,
     recorder: Arc<Recorder>,
+    variations: Arc<Variations>,
     async_executor: AsyncExecutor<KitPlayer>,
 ) -> Option<Box<dyn Editor>> {
     let egui_state = params.editor_state.clone();
@@ -466,6 +460,7 @@ pub fn create(
                 &slot,
                 &history,
                 &recorder,
+                &variations,
                 &|task| async_executor.execute_background(task),
             );
         },
@@ -484,6 +479,7 @@ pub fn draw(
     slot: &KitSlot,
     history: &History,
     recorder: &Recorder,
+    variations: &Variations,
     run: &dyn Fn(Task),
 ) {
     {
@@ -809,20 +805,34 @@ pub fn draw(
                     ui.horizontal(|ui| {
                         if ui
                             .add_enabled(has_source, egui::Button::new("Nouvelles variations"))
-                            .on_hover_text("Rejoue chaque recette avec une nouvelle graine (sauf pads verrouillés)")
+                            .on_hover_text("Rejoue chaque recette avec une nouvelle graine")
                             .clicked()
                         {
                             run(Task::Regenerate(None));
                         }
-                        ui.separator();
-                        ui.label("Frappes")
-                            .on_hover_text("Sons joués à tour de rôle par pad, pour varier les frappes");
-                        let mut rr = params.round_robin.value();
-                        for n in 1..=MAX_ROUND_ROBIN as i32 {
-                            if ui.selectable_label(rr == n, format!("{n}")).clicked() {
-                                rr = n;
-                                set_int(setter, &params.round_robin, n);
-                            }
+                        let (cursor, count) = variations.position();
+                        if ui
+                            .add_enabled(cursor > 1, egui::Button::new("⏴"))
+                            .on_hover_text("Revenir aux variations précédentes")
+                            .clicked()
+                        {
+                            run(Task::VariationsBack);
+                        }
+                        ui.label(
+                            egui::RichText::new(if count > 0 {
+                                format!("{cursor}/{count}")
+                            } else {
+                                "–".to_string()
+                            })
+                            .color(INK_SOFT),
+                        )
+                        .on_hover_text("Séries de variations de ce son ; chaque série se retrouve avec ⏴ et ⏵");
+                        if ui
+                            .add_enabled(cursor < count, egui::Button::new("⏵"))
+                            .on_hover_text("Revenir aux variations suivantes")
+                            .clicked()
+                        {
+                            run(Task::VariationsForward);
                         }
                         ui.separator();
                         let mut melodic = params.melodic.value();
@@ -957,15 +967,6 @@ pub fn draw(
                     run(Task::Reshape);
                 }
             }
-            let rr = params.round_robin.value().max(1) as usize;
-            if state.round_robin_sent.is_none() {
-                state.round_robin_sent = Some(rr);
-            } else if !pointer_down && state.round_robin_sent != Some(rr) {
-                state.round_robin_sent = Some(rr);
-                if has_source {
-                    run(Task::SetRoundRobin(rr));
-                }
-            }
 
             // ---- dépôt
             if let Some(path) = dropped {
@@ -1070,11 +1071,7 @@ fn pad_panel(
             pad.seed
                 .map(|s| format!(" · graine {s}"))
                 .unwrap_or_default(),
-            if pad.variant_count() > 1 {
-                format!(" · {} frappes", pad.variant_count())
-            } else {
-                String::new()
-            }
+            ""
         ))
         .small()
         .color(INK_SOFT),
@@ -1105,40 +1102,12 @@ fn pad_panel(
         .changed();
     changed |= ui
         .add(
-            egui::Slider::new(&mut s.pan, -1.0..=1.0)
-                .text("Pan")
-                .fixed_decimals(2),
-        )
-        .changed();
-    changed |= ui
-        .add(
             egui::Slider::new(&mut s.decay, 0.05..=1.0)
                 .text("Chute")
                 .fixed_decimals(2),
         )
         .changed();
-    ui.horizontal(|ui| {
-        changed |= ui.checkbox(&mut s.reverse, "Inversé").changed();
-        changed |= ui
-            .checkbox(&mut s.locked, "Verrouillé")
-            .on_hover_text("Variations, cadrage et frappes le laissent tel quel")
-            .changed();
-    });
-    ui.horizontal(|ui| {
-        ui.label("Étouffement")
-            .on_hover_text("Les pads d'un même groupe se coupent entre eux");
-        for g in 0..=PadSettings::MAX_CHOKE {
-            let label = if g == 0 {
-                "—".to_string()
-            } else {
-                g.to_string()
-            };
-            if ui.selectable_label(s.choke == g, label).clicked() {
-                s.choke = g;
-                changed = true;
-            }
-        }
-    });
+    changed |= ui.checkbox(&mut s.reverse, "Inversé").changed();
     if changed {
         state.editing = Some((i, s.clamped()));
     }

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0 — 2026-10-28 · « Moins de boutons, et un retour sur les variations »
+
+- **Retirés de l'interface** : Frappes (sons à tour de rôle), groupe d'étouffement, panoramique et verrou. Le paramètre « Frappes » disparaît du plugin (un preset 0.4.0 se rouvre, ce réglage est ignoré). Le format `kit.json` ne change pas : un kit qui porte encore `pan`, `choke`, `locked` ou des `alternates` se charge et se joue comme avant, simplement sans réglage à l'écran.
+- **Retour sur les variations** : chaque « Nouvelles variations » (ou variation d'un pad) ajoute une série de graines à une liste ; **⏴** et **⏵**, avec le compteur « 3/7 », rejouent le kit avec les graines d'une série précédente ou suivante, en parallèle, au bit près. Une nouvelle série après un retour remplace ce qui suivait ; un nouveau son, une capture ou un kit chargé repartent de zéro ; 64 séries gardées ; les pads déposés à la main ne bougent pas. S'ajoute à Annuler, qui reste.
+- `editor::draw` reçoit les séries ; `examples/snapshot.rs` en montre trois.
+- 109 tests.
+
 ## 0.4.0 — 2026-10-24 · « Jouable, réglable, exportable »
 
 - **Interface refaite**, dans l'esprit de la page : barre de titre bleue, panneau beige, pads à écran LCD vert qui montrent la forme d'onde du son, le nom et la note (C1…G2), glow vert à la frappe, cadre bleu sur le pad sélectionné. Fenêtre 820 × 540. Liens du bandeau en blanc souligné, rails de curseurs visibles, reflets sur la barre de titre et les pads.

@@ -15,6 +15,7 @@ use make_it_drum::editor::{draw, style, EditorState};
 use make_it_drum::history::History;
 use make_it_drum::params::KitPlayerParams;
 use make_it_drum::slot::KitSlot;
+use make_it_drum::variations::Variations;
 use make_it_drum_core::kit::Kit;
 
 struct NoHost;
@@ -50,6 +51,7 @@ fn main() {
     slot.set_sample_rate(44100.0);
     let history = History::new();
     let recorder = Recorder::new();
+    let variations = Variations::new();
     if let Some(path) = source {
         let bytes = std::fs::read(&path).expect("lecture du son");
         let ext = std::path::Path::new(&path)
@@ -59,6 +61,9 @@ fn main() {
             make_it_drum_core::wav::decode_audio(&bytes, ext.as_deref()).expect("décodage");
         let seeds: Vec<u32> = (0..20).map(|i| 42 + i * 7919).collect();
         let kit = Kit::generate("porte qui claque", &sample, Some(&seeds), |_, _| {}).expect("kit");
+        variations.reset(make_it_drum::loader::seeds_of(&kit));
+        variations.record((0..20).map(|i| Some(7 + i)).collect());
+        variations.record((0..20).map(|i| Some(99 + i)).collect());
         slot.publish(Arc::new(kit));
         slot.set_status("Kit « porte qui claque » — 20 pads");
     } else {
@@ -98,7 +103,15 @@ fn main() {
                 style(ctx);
             }
             draw(
-                ctx, &setter, &mut state, &params, &slot, &history, &recorder, &run,
+                ctx,
+                &setter,
+                &mut state,
+                &params,
+                &slot,
+                &history,
+                &recorder,
+                &variations,
+                &run,
             );
         });
         for (_, delta) in &out.textures_delta.set {

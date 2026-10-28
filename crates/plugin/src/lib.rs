@@ -13,6 +13,7 @@ pub mod history;
 pub mod loader;
 pub mod params;
 pub mod slot;
+pub mod variations;
 
 use std::num::NonZeroU32;
 use std::path::PathBuf;
@@ -27,11 +28,13 @@ use capture::Recorder;
 use history::History;
 use loader::{
     exports_dir, first_kit, generate_from_path, generate_from_sample, kits_dir, load_from_path,
-    load_from_state, regenerate, rename_pad, replace_pad, reshape, set_round_robin, set_settings,
+    load_from_state, regenerate, regenerate_with_seeds, rename_pad, replace_pad, reshape, seeds_of,
+    set_settings,
 };
 use make_it_drum_core::kit::PadSettings;
 use params::KitPlayerParams;
 use slot::KitSlot;
+use variations::Variations;
 
 /// Tâches exécutées hors du thread audio.
 pub enum Task {
@@ -49,8 +52,10 @@ pub enum Task {
     SetSettings { pad: usize, settings: PadSettings },
     /// Renommer un pad (GUI).
     RenamePad { pad: usize, label: String },
-    /// Donner `n` sons à tour de rôle à chaque pad généré (GUI).
-    SetRoundRobin(usize),
+    /// Revenir à la série de variations précédente (GUI).
+    VariationsBack,
+    /// Revenir à la série de variations suivante (GUI).
+    VariationsForward,
     /// Revenir au kit précédent (GUI).
     Undo,
     /// Enregistrer le kit dans le dossier des kits sous ce nom (GUI).
@@ -70,6 +75,7 @@ pub struct KitPlayer {
     slot: Arc<KitSlot>,
     history: Arc<History>,
     recorder: Arc<Recorder>,
+    variations: Arc<Variations>,
     engine: Engine,
     seen_generation: u64,
     loaded_fingerprint: String,
@@ -82,6 +88,7 @@ impl Default for KitPlayer {
             slot: Arc::new(KitSlot::new()),
             history: Arc::new(History::new()),
             recorder: Arc::new(Recorder::new()),
+            variations: Arc::new(Variations::new()),
             engine: Engine::new(44100.0),
             seen_generation: 0,
             loaded_fingerprint: String::new(),
@@ -125,7 +132,14 @@ impl Plugin for KitPlayer {
         let slot = self.slot.clone();
         let history = self.history.clone();
         let recorder = self.recorder.clone();
+        let variations = self.variations.clone();
         Box::new(move |task| {
+            // ce que la tâche fait aux séries de variations
+            let records_seeds = matches!(task, Task::Regenerate(_));
+            let resets_seeds = matches!(
+                task,
+                Task::Generate(_) | Task::Capture | Task::LoadPath(_) | Task::Restore
+            );
             // tâches qui écrivent leur propre statut, et celles qui méritent un « Annuler »
             let dropped = !matches!(task, Task::LoadPath(_) | Task::Restore | Task::Undo);
             let undoable = matches!(
@@ -134,7 +148,8 @@ impl Plugin for KitPlayer {
                     | Task::Generate(_)
                     | Task::Regenerate(_)
                     | Task::Reshape
-                    | Task::SetRoundRobin(_)
+                    | Task::VariationsBack
+                    | Task::VariationsForward
                     | Task::Capture
                     | Task::LoadPath(_)
             );
@@ -202,23 +217,28 @@ impl Plugin for KitPlayer {
                     Some(current) => rename_pad(&current, pad, &label),
                     None => Err(make_it_drum_core::kit::KitError::Empty),
                 },
-                Task::SetRoundRobin(n) => match slot.current() {
-                    Some(current) if current.round_robin() != n => {
-                        set_round_robin(&current, n, |kit, i| {
-                            slot.set_status(format!("Variantes de frappe {}/{PAD_COUNT}", i + 1));
-                            slot.publish(Arc::new(kit.clone()));
-                        })
-                        .map(|(kit, state)| {
-                            slot.set_status(format!(
-                                "{n} frappe{} par pad",
-                                if n > 1 { "s" } else { "" }
-                            ));
-                            (kit, state)
-                        })
+                Task::VariationsBack | Task::VariationsForward => {
+                    let seeds = if matches!(task, Task::VariationsBack) {
+                        variations.back()
+                    } else {
+                        variations.forward()
+                    };
+                    match (slot.current(), seeds) {
+                        (Some(current), Some(seeds)) => {
+                            regenerate_with_seeds(&current, &seeds, shaping, |kit, i| {
+                                slot.set_status(format!("Rendu {}/{PAD_COUNT}", i + 1));
+                                slot.publish(Arc::new(kit.clone()));
+                            })
+                            .map(|(kit, state)| {
+                                let (c, n) = variations.position();
+                                slot.set_status(format!("Variations {c}/{n}"));
+                                (kit, state)
+                            })
+                        }
+                        (None, _) => Err(make_it_drum_core::kit::KitError::NoSource),
+                        (_, None) => return,
                     }
-                    Some(_) => return,
-                    None => Err(make_it_drum_core::kit::KitError::NoSource),
-                },
+                }
                 Task::Undo => match history.pop() {
                     Some((kit, state)) => {
                         slot.set_status(format!("Retour au kit « {} »", kit.name));
@@ -332,6 +352,11 @@ impl Plugin for KitPlayer {
                     if let Some(Some((prev_kit, prev_state))) = previous {
                         history.push(prev_kit, prev_state);
                     }
+                    if resets_seeds {
+                        variations.reset(seeds_of(&kit));
+                    } else if records_seeds {
+                        variations.record(seeds_of(&kit));
+                    }
                     if !dropped {
                         let n = kit.pads.iter().filter(|p| !p.is_empty()).count();
                         slot.set_status(format!(
@@ -356,6 +381,7 @@ impl Plugin for KitPlayer {
             self.slot.clone(),
             self.history.clone(),
             self.recorder.clone(),
+            self.variations.clone(),
             async_executor,
         )
     }

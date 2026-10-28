@@ -263,3 +263,57 @@ fn reshape_keeps_seeds_and_embeds_the_shaping_in_the_state() {
     assert_eq!(varied.shaping, Shaping::default());
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn regenerate_with_seeds_brings_a_previous_series_back_bit_for_bit() {
+    use make_it_drum::loader::{generate_from_path, regenerate, regenerate_with_seeds, seeds_of};
+    use make_it_drum_core::render::Shaping;
+    let dir = tmp();
+    std::fs::create_dir_all(&dir).unwrap();
+    let wav = dir.join("snap.wav");
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 22050,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut w = hound::WavWriter::create(&wav, spec).unwrap();
+    for i in 0..6000 {
+        let v = ((i as f32 * 0.07).sin() * 10000.0 * (1.0 - i as f32 / 6000.0)) as i16;
+        w.write_sample(v).unwrap();
+    }
+    w.finalize().unwrap();
+
+    let (first, _) = generate_from_path(&wav, Shaping::default(), |_, _| {}).unwrap();
+    let first_seeds = seeds_of(&first);
+    assert_eq!(first_seeds.len(), 20);
+    assert!(first_seeds.iter().all(|s| s.is_some()));
+
+    let (second, _) = regenerate(&first, None, Shaping::default()).unwrap();
+    assert_ne!(seeds_of(&second), first_seeds);
+
+    let mut calls = 0;
+    let (back, state) =
+        regenerate_with_seeds(&second, &first_seeds, Shaping::default(), |_, _| calls += 1)
+            .unwrap();
+    assert_eq!(calls, 20);
+    assert_eq!(seeds_of(&back), first_seeds);
+    for (a, b) in back.pads.iter().zip(&first.pads) {
+        assert_eq!(
+            a.sample, b.sample,
+            "pad {} identique à la première série",
+            a.index
+        );
+    }
+    assert!(state.zip_base64.is_some());
+
+    // un pad déposé à la main (sans graine) n'est pas touché par un retour
+    let (dropped, _) = make_it_drum::loader::replace_pad(Some(&second), 4, &wav).unwrap();
+    assert_eq!(dropped.pads[4].seed, None);
+    let (back2, _) =
+        regenerate_with_seeds(&dropped, &first_seeds, Shaping::default(), |_, _| {}).unwrap();
+    assert_eq!(back2.pads[4].seed, None);
+    assert_eq!(back2.pads[4].sample, dropped.pads[4].sample);
+    assert_eq!(back2.pads[5].sample, first.pads[5].sample);
+    std::fs::remove_dir_all(&dir).ok();
+}
