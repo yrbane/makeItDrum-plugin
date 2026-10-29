@@ -37,7 +37,7 @@ pub struct KitPlayerParams {
     #[id = "melodic_pad"]
     pub melodic_pad: IntParam,
 
-    #[persist = "editor-state-v5"]
+    #[persist = "editor-state-v6"]
     pub editor_state: Arc<EguiState>,
 
     #[persist = "kit"]
@@ -82,7 +82,7 @@ impl Default for KitPlayerParams {
                     max: make_it_drum_core::kit::PAD_COUNT as i32,
                 },
             ),
-            editor_state: EguiState::from_size(820, 568),
+            editor_state: EguiState::from_size(820, 562),
             kit_state: Arc::new(RwLock::new(KitState::default())),
         }
     }

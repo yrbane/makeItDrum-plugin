@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nih_plug::prelude::*;
-use nih_plug_egui::{create_egui_editor, egui, widgets};
+use nih_plug_egui::{create_egui_editor, egui};
 
 use make_it_drum_core::kit::{Kit, Pad, PadSettings, PAD_COUNT};
 use make_it_drum_core::render::Shaping;
@@ -23,6 +23,7 @@ use crate::capture::Recorder;
 use crate::history::History;
 use crate::loader::{display_name, exports_dir, kits_dir, scan_kits};
 use crate::params::KitPlayerParams;
+use crate::potard::{self, Control};
 use crate::slot::KitSlot;
 use crate::variations::Variations;
 use crate::{KitPlayer, Task};
@@ -47,6 +48,12 @@ const PAD_FACE: egui::Color32 = egui::Color32::from_rgb(0x6b, 0x69, 0x5f);
 const PAD_FACE_LIGHT: egui::Color32 = egui::Color32::from_rgb(0x8c, 0x8a, 0x80);
 const PAD_EDGE: egui::Color32 = egui::Color32::from_rgb(0x47, 0x44, 0x3c);
 const RECORD_RED: egui::Color32 = egui::Color32::from_rgb(0xd8, 0x2c, 0x2c);
+
+/// Thème des contrôles potard : accent bleu XP, piste de potard.
+const THEME: potard::Theme = potard::Theme {
+    accent: XP_BLUE_MID,
+    track: potard::TRACK,
+};
 
 const PAD_W: f32 = 96.0;
 const PAD_H: f32 = 60.0;
@@ -134,6 +141,9 @@ pub struct EditorState {
     waves_generation: u64,
     capture_seconds: f32,
     show_path: bool,
+    /// Niveau et pic affichés par le VU-mètre, lissés image par image.
+    level: f32,
+    peak: f32,
 }
 
 impl Default for EditorState {
@@ -157,6 +167,8 @@ impl EditorState {
             waves_generation: u64::MAX,
             capture_seconds: 2.0,
             show_path: false,
+            level: 0.0,
+            peak: 0.0,
         }
     }
 
@@ -587,8 +599,40 @@ pub fn draw(
                 )
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label("Gain");
-                        ui.add(widgets::ParamSlider::for_param(&params.gain, setter));
+                        let mut db = util::gain_to_db(params.gain.value());
+                        let g = potard::slider(
+                            ui,
+                            &THEME,
+                            Control::new(&mut db, -30.0, 6.0)
+                                .default_value(0.0)
+                                .step(0.5)
+                                .unit("dB")
+                                .decimals(1)
+                                .label("gain")
+                                .hint("Double-clic : 0 dB"),
+                            150.0,
+                        );
+                        if g.changed {
+                            set_float(setter, &params.gain, util::db_to_gain(db));
+                        }
+                        ui.label(
+                            egui::RichText::new(format!("{db:+.1} dB"))
+                                .small()
+                                .color(INK_SOFT),
+                        );
+                        ui.separator();
+                        let now = slot.level();
+                        state.level = now.max(state.level * 0.85);
+                        state.peak = state.level.max(state.peak * 0.995);
+                        potard::vumeter(
+                            ui,
+                            state.level,
+                            state.peak,
+                            16,
+                            egui::vec2(130.0, 10.0),
+                            true,
+                        )
+                        .on_hover_text("Sortie : crête par bloc, mémoire de pic");
                         ui.separator();
                         ui.label(egui::RichText::new(slot.status()).small().color(INK_SOFT));
                     });
@@ -625,23 +669,20 @@ pub fn draw(
                                     }
                                 }
                             });
-                        if ui
-                            .button("⟳")
+                        if potard::button(ui, &THEME, "⟳", false, false)
                             .on_hover_text("Relire le dossier des kits")
                             .clicked()
                         {
                             state.kits = scan_kits(&kits_dir());
                         }
-                        if ui
-                            .small_button("…")
+                        if potard::button(ui, &THEME, "…", state.show_path, false)
                             .on_hover_text("Charger depuis un chemin")
                             .clicked()
                         {
                             state.show_path = !state.show_path;
                         }
                         ui.separator();
-                        if ui
-                            .add_enabled(!history.is_empty(), egui::Button::new("⟲ Annuler"))
+                        if potard::button(ui, &THEME, "⟲ ANNULER", false, history.is_empty())
                             .on_hover_text("Revenir au kit précédent")
                             .clicked()
                         {
@@ -654,8 +695,7 @@ pub fn draw(
                                 .hint_text("nom du kit"),
                         );
                         let can_save = current_kit.is_some() && !state.save_name.trim().is_empty();
-                        if ui
-                            .add_enabled(can_save, egui::Button::new("Enregistrer"))
+                        if potard::button(ui, &THEME, "ENREGISTRER", false, !can_save)
                             .on_hover_text(format!("En .kit.zip dans {}", kits_dir().display()))
                             .clicked()
                         {
@@ -696,7 +736,9 @@ pub fn draw(
                                     .desired_width(420.0)
                                     .hint_text("…/makeitdrum_pack.zip ou dossier de WAV"),
                             );
-                            if ui.button("Charger").clicked() && !state.path_input.trim().is_empty() {
+                            if potard::button(ui, &THEME, "CHARGER", false, false).clicked()
+                                && !state.path_input.trim().is_empty()
+                            {
                                 run(Task::LoadPath(PathBuf::from(
                                     state.path_input.trim(),
                                 )));
@@ -736,6 +778,7 @@ pub fn draw(
                                     );
                                 });
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    ui.visuals_mut().override_text_color = Some(GREEN_DIM);
                                     let rate = slot.sample_rate();
                                     if recorder.is_recording() {
                                         let p = recorder.progress();
@@ -749,29 +792,35 @@ pub fn draw(
                                             recorder.cancel();
                                         }
                                     } else {
-                                        let button = egui::Button::new(
-                                            egui::RichText::new(format!(
-                                                "⏺ Capturer {:.1} s",
-                                                state.capture_seconds
-                                            ))
-                                            .color(egui::Color32::WHITE),
+                                        let text = format!("⏺ CAPTURER {:.1} s", state.capture_seconds);
+                                        if potard::button_colored(
+                                            ui,
+                                            &THEME,
+                                            &text,
+                                            true,
+                                            rate <= 0.0,
+                                            RECORD_RED,
                                         )
-                                        .fill(RECORD_RED);
-                                        if ui
-                                            .add_enabled(rate > 0.0, button)
-                                            .on_hover_text(
-                                                "Enregistre l'entrée « Capture » du plugin (sidechain) et en fait un kit",
-                                            )
-                                            .clicked()
+                                        .on_hover_text(
+                                            "Enregistre l'entrée « Capture » du plugin (sidechain) et en fait un kit",
+                                        )
+                                        .clicked()
                                         {
                                             recorder.arm(state.capture_seconds as f64, rate);
                                         }
-                                        ui.add(
-                                            egui::Slider::new(&mut state.capture_seconds, 0.5..=8.0)
-                                                .show_value(false)
-                                                .text(""),
-                                        )
-                                        .on_hover_text("Durée de la capture");
+                                        potard::slider(
+                                            ui,
+                                            &THEME,
+                                            Control::new(&mut state.capture_seconds, 0.5, 8.0)
+                                                .default_value(2.0)
+                                                .step(0.5)
+                                                .unit("s")
+                                                .decimals(1)
+                                                .label("durée")
+                                                .color(RECORD_RED)
+                                                .hint("Durée de la capture"),
+                                            110.0,
+                                        );
                                     }
                                 });
                             });
@@ -783,17 +832,43 @@ pub fn draw(
 
                     // ---- cadrage : fidélité, durée, départ
                     ui.horizontal(|ui| {
-                        ui.label("Fidélité")
-                            .on_hover_text("0 % : la page. 100 % : le son d'origine, presque tel quel");
-                        ui.add(widgets::ParamSlider::for_param(&params.fidelity, setter));
-                        ui.label("Durée")
-                            .on_hover_text("0 % : des percussions. 100 % : étirées vers la durée du son");
-                        ui.add(widgets::ParamSlider::for_param(&params.length, setter));
-                        ui.label("Départ")
-                            .on_hover_text("Point de départ dans le son source");
-                        ui.add(widgets::ParamSlider::for_param(&params.start, setter));
-                        if ui
-                            .add_enabled(has_source, egui::Button::new("Au transitoire"))
+                        let percent = |ui: &mut egui::Ui, param: &FloatParam, label, hint| {
+                            let mut v = param.value() * 100.0;
+                            let g = potard::slider(
+                                ui,
+                                &THEME,
+                                Control::new(&mut v, 0.0, 100.0)
+                                    .default_value(0.0)
+                                    .step(1.0)
+                                    .unit("%")
+                                    .decimals(0)
+                                    .label(label)
+                                    .hint(hint),
+                                165.0,
+                            );
+                            if g.changed {
+                                set_float(setter, param, v / 100.0);
+                            }
+                        };
+                        percent(
+                            ui,
+                            &params.fidelity,
+                            "fidélité",
+                            "0 % : la page. 100 % : le son d'origine, presque tel quel",
+                        );
+                        percent(
+                            ui,
+                            &params.length,
+                            "durée",
+                            "0 % : des percussions. 100 % : étirées vers la durée du son",
+                        );
+                        percent(
+                            ui,
+                            &params.start,
+                            "départ",
+                            "Point de départ dans le son source",
+                        );
+                        if potard::button(ui, &THEME, "AU TRANSITOIRE", false, !has_source)
                             .on_hover_text("Place le départ juste avant l'attaque la plus forte")
                             .clicked()
                         {
@@ -803,16 +878,14 @@ pub fn draw(
                         }
                     });
                     ui.horizontal(|ui| {
-                        if ui
-                            .add_enabled(has_source, egui::Button::new("Nouvelles variations"))
+                        if potard::button(ui, &THEME, "NOUVELLES VARIATIONS", false, !has_source)
                             .on_hover_text("Rejoue chaque recette avec une nouvelle graine")
                             .clicked()
                         {
                             run(Task::Regenerate(None));
                         }
                         let (cursor, count) = variations.position();
-                        if ui
-                            .add_enabled(cursor > 1, egui::Button::new("⏴"))
+                        if potard::arrow_button(ui, &THEME, "‹", cursor <= 1)
                             .on_hover_text("Revenir aux variations précédentes")
                             .clicked()
                         {
@@ -826,9 +899,8 @@ pub fn draw(
                             })
                             .color(INK_SOFT),
                         )
-                        .on_hover_text("Séries de variations de ce son ; chaque série se retrouve avec ⏴ et ⏵");
-                        if ui
-                            .add_enabled(cursor < count, egui::Button::new("⏵"))
+                        .on_hover_text("Séries de variations de ce son ; chaque série se retrouve avec ‹ et ›");
+                        if potard::arrow_button(ui, &THEME, "›", cursor >= count)
                             .on_hover_text("Revenir aux variations suivantes")
                             .clicked()
                         {
@@ -836,39 +908,30 @@ pub fn draw(
                         }
                         ui.separator();
                         let mut melodic = params.melodic.value();
-                        if ui
-                            .checkbox(&mut melodic, "Mélodique")
+                        if potard::switch(ui, &THEME, &mut melodic, "Mélodique", false)
                             .on_hover_text("Un seul pad joué sur tout le clavier, transposé (do médian = tel quel)")
                             .changed()
                         {
                             set_bool(setter, &params.melodic, melodic);
                         }
-                        let mut pad = params.melodic_pad.value();
-                        let pad_label = |i: i32| {
-                            current_kit
-                                .as_ref()
-                                .and_then(|k| k.pads.get((i - 1) as usize))
-                                .filter(|p| !p.is_empty())
-                                .map(|p| format!("{i} · {}", p.label))
-                                .unwrap_or_else(|| format!("{i}"))
-                        };
-                        ui.add_enabled_ui(melodic, |ui| {
-                            egui::ComboBox::from_id_salt("melodic-pad")
-                                .selected_text(pad_label(pad))
-                                .width(120.0)
-                                .show_ui(ui, |ui| {
-                                    for i in 1..=PAD_COUNT as i32 {
-                                        if ui.selectable_value(&mut pad, i, pad_label(i)).changed() {
-                                            set_int(setter, &params.melodic_pad, pad);
-                                        }
-                                    }
-                                });
-                        });
+                        let options: Vec<String> = (1..=PAD_COUNT as i32)
+                            .map(|i| {
+                                current_kit
+                                    .as_ref()
+                                    .and_then(|k| k.pads.get((i - 1) as usize))
+                                    .filter(|p| !p.is_empty())
+                                    .map(|p| format!("{i} · {}", p.label))
+                                    .unwrap_or_else(|| format!("{i}"))
+                            })
+                            .collect();
+                        let mut index = (params.melodic_pad.value().max(1) - 1) as usize;
+                        if potard::stepper(ui, &THEME, &mut index, &options, 88.0, !melodic) {
+                            set_int(setter, &params.melodic_pad, index as i32 + 1);
+                        }
                     });
                     ui.horizontal(|ui| {
                         let mut gate = params.gate.value();
-                        if ui
-                            .checkbox(&mut gate, "Durée de la note")
+                        if potard::switch(ui, &THEME, &mut gate, "Durée de la note", false)
                             .on_hover_text("Le son s'arrête quand la note MIDI est relâchée (fondu court)")
                             .changed()
                         {
@@ -884,9 +947,9 @@ pub fn draw(
                         let mut all_self = !pads.is_empty() && pads.iter().all(|p| p.settings.cut_self);
                         let mut all_by_all =
                             !pads.is_empty() && pads.iter().all(|p| p.settings.cut_by_all);
-                        ui.add_enabled_ui(!pads.is_empty(), |ui| {
-                            if ui
-                                .checkbox(&mut all_self, "Cut itself")
+                        {
+                            let none = pads.is_empty();
+                            if potard::switch(ui, &THEME, &mut all_self, "Cut itself", none)
                                 .on_hover_text("Une nouvelle frappe du pad coupe la précédente (sinon elles se superposent)")
                                 .changed()
                             {
@@ -895,8 +958,7 @@ pub fn draw(
                                     cut_by_all: None,
                                 });
                             }
-                            if ui
-                                .checkbox(&mut all_by_all, "Cut by all")
+                            if potard::switch(ui, &THEME, &mut all_by_all, "Cut by all", none)
                                 .on_hover_text("N'importe quel autre pad frappé coupe celui-ci")
                                 .changed()
                             {
@@ -905,7 +967,7 @@ pub fn draw(
                                     cut_by_all: Some(all_by_all),
                                 });
                             }
-                        });
+                        }
                     });
                     ui.add_space(6.0);
 
@@ -1049,7 +1111,7 @@ fn pad_panel(
         );
         ui.add_space(6.0);
         ui.label(
-            egui::RichText::new("Cliquez un pad pour le régler : nom, gain, hauteur, panoramique, chute, sens, groupe d'étouffement, verrou.")
+            egui::RichText::new("Cliquez un pad pour le régler : nom, gain, hauteur, chute, sens de lecture, cut itself, cut by all.")
                 .color(INK_SOFT),
         );
         return;
@@ -1068,6 +1130,8 @@ fn pad_panel(
                 .small()
                 .color(INK_SOFT),
         );
+        potard::led(ui, &THEME, slot.playing() & (1 << i) != 0, GREEN)
+            .on_hover_text("Allumée pendant la lecture du pad");
     });
     let Some(pad) = pad.filter(|p| !p.is_empty()) else {
         ui.add_space(6.0);
@@ -1118,46 +1182,72 @@ fn pad_panel(
         .small()
         .color(INK_SOFT),
     );
-    // réglages
-    ui.spacing_mut().slider_width = (ui.available_width() - 120.0).max(80.0);
+    // réglages : trois knobs potard, puis les interrupteurs
     ui.spacing_mut().item_spacing.y = 3.0;
     let mut s = match state.editing {
         Some((p, s)) if p == i => s,
         _ => pad.settings,
     };
     let mut changed = false;
-    changed |= ui
-        .add(
-            egui::Slider::new(&mut s.gain_db, -24.0..=12.0)
-                .text("Gain")
-                .suffix(" dB")
-                .fixed_decimals(1),
-        )
-        .changed();
-    changed |= ui
-        .add(
-            egui::Slider::new(&mut s.pitch, -24.0..=24.0)
-                .text("Hauteur")
-                .suffix(" st")
-                .fixed_decimals(1),
-        )
-        .changed();
-    changed |= ui
-        .add(
-            egui::Slider::new(&mut s.decay, 0.05..=1.0)
-                .text("Chute")
-                .fixed_decimals(2),
-        )
-        .changed();
     ui.horizontal(|ui| {
-        changed |= ui.checkbox(&mut s.reverse, "Inversé").changed();
-        changed |= ui
-            .checkbox(&mut s.cut_self, "Cut itself")
+        ui.spacing_mut().item_spacing.x = 10.0;
+        changed |= potard::knob(
+            ui,
+            &THEME,
+            Control::new(&mut s.gain_db, -24.0, 12.0)
+                .default_value(0.0)
+                .step(0.5)
+                .unit("dB")
+                .decimals(1)
+                .label("gain")
+                .hint("Double-clic : 0 dB · Shift : précis"),
+            44.0,
+        )
+        .changed;
+        changed |= potard::knob(
+            ui,
+            &THEME,
+            Control::new(&mut s.pitch, -24.0, 24.0)
+                .default_value(0.0)
+                .step(1.0)
+                .unit("st")
+                .decimals(1)
+                .label("hauteur")
+                .hint("Demi-tons · double-clic : 0"),
+            44.0,
+        )
+        .changed;
+        changed |= potard::knob(
+            ui,
+            &THEME,
+            Control::new(&mut s.decay, 0.05, 1.0)
+                .default_value(1.0)
+                .step(0.05)
+                .decimals(2)
+                .label("chute")
+                .hint("Part du son jouée, fondu sur la fin"),
+            44.0,
+        )
+        .changed;
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 1.0;
+            for text in [
+                format!("{:+.1} dB", s.gain_db),
+                format!("{:+.1} st", s.pitch),
+                format!("{:.0} %", s.decay * 100.0),
+            ] {
+                ui.label(egui::RichText::new(text).small().color(INK_SOFT));
+            }
+        });
+    });
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 10.0;
+        changed |= potard::switch(ui, &THEME, &mut s.reverse, "Inversé", false).changed();
+        changed |= potard::switch(ui, &THEME, &mut s.cut_self, "Cut itself", false)
             .on_hover_text("Une nouvelle frappe de ce pad coupe la précédente")
             .changed();
     });
-    changed |= ui
-        .checkbox(&mut s.cut_by_all, "Cut by all")
+    changed |= potard::switch(ui, &THEME, &mut s.cut_by_all, "Cut by all", false)
         .on_hover_text("N'importe quel autre pad frappé coupe celui-ci")
         .changed();
     if changed {
@@ -1165,25 +1255,29 @@ fn pad_panel(
     }
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        if ui.button("⏵ Jouer").clicked() {
+        if potard::button(ui, &THEME, "⏵ JOUER", false, false).clicked() {
             slot.request_trigger(i);
         }
-        if ui
-            .add_enabled(
-                has_source && pad.seed.is_some(),
-                egui::Button::new("Variation"),
-            )
-            .on_hover_text("Nouvelle graine pour ce pad")
-            .clicked()
+        if potard::button(
+            ui,
+            &THEME,
+            "VARIATION",
+            false,
+            !(has_source && pad.seed.is_some()),
+        )
+        .on_hover_text("Nouvelle graine pour ce pad")
+        .clicked()
         {
             run(Task::Regenerate(Some(i)));
         }
-        if ui
-            .add_enabled(
-                !pad.settings.is_default(),
-                egui::Button::new("Réinitialiser"),
-            )
-            .clicked()
+        if potard::button(
+            ui,
+            &THEME,
+            "RÉINITIALISER",
+            false,
+            pad.settings.is_default(),
+        )
+        .clicked()
         {
             state.editing = Some((i, PadSettings::default()));
         }

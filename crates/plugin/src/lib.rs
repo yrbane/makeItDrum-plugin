@@ -12,6 +12,7 @@ pub mod export;
 pub mod history;
 pub mod loader;
 pub mod params;
+pub mod potard;
 pub mod slot;
 pub mod variations;
 
@@ -484,11 +485,14 @@ impl Plugin for KitPlayer {
             pos = end;
         }
 
+        let mut peak = 0.0f32;
         for (l, r) in left.iter_mut().zip(right.iter_mut()) {
             let gain = self.params.gain.smoothed.next();
             *l *= gain;
             *r *= gain;
+            peak = peak.max(l.abs()).max(r.abs());
         }
+        self.slot.set_level(peak);
         self.slot.set_playing(self.engine.playing_mask());
         ProcessStatus::Normal
     }

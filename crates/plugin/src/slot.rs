@@ -21,6 +21,7 @@ pub struct KitSlot {
     status: Mutex<String>,
     pending_triggers: AtomicU32,
     playing: AtomicU32,
+    level: AtomicU32,
     sample_rate: AtomicU32,
 }
 
@@ -99,6 +100,15 @@ impl KitSlot {
 
     pub fn playing(&self) -> u32 {
         self.playing.load(Ordering::Acquire)
+    }
+
+    /// Crête de sortie du dernier bloc (0..1 et plus), posée par le thread audio.
+    pub fn set_level(&self, peak: f32) {
+        self.level.store(peak.max(0.0).to_bits(), Ordering::Release);
+    }
+
+    pub fn level(&self) -> f32 {
+        f32::from_bits(self.level.load(Ordering::Acquire))
     }
 
     /// Fréquence d'échantillonnage de l'hôte (0 tant qu'elle est inconnue).

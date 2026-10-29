@@ -28,6 +28,12 @@ porté en Rust ; le plugin lit aussi les kits exportés par la page.
    **Durée de la note** (coché par défaut) : le son s'arrête, en fondu court, quand la
    note MIDI est relâchée ; décoché, chaque frappe joue jusqu'au bout. Un clic sur un pad
    joue toujours jusqu'au bout.
+   Les contrôles sont ceux de [potard](https://github.com/yrbane/potard), portés en Rust
+   (knobs, sliders à flèche, switches, stepper, boutons, LED, VU-mètre), avec ses gestes :
+   **drag** vertical sur un knob, horizontal sur un slider (200 px = toute la course),
+   **Shift** pendant le drag = précision ×10, **double-clic** = valeur par défaut,
+   **molette** et **flèches** du clavier = un pas, **Début / Fin** = bornes. Le VU-mètre du
+   pied montre la crête de sortie avec mémoire de pic.
 4. **Clic droit sur un pad** : nouvelle variation de cette recette (nouvelle graine), comme
    le clic sur la page. Le bouton **Nouvelles variations** refait tout le kit. Chaque série
    de variations est mémorisée : **⏴** et **⏵** y reviennent (compteur « 3/7 »), et une
@@ -119,7 +125,7 @@ validé par `auval` en CI ; il n'a pas encore été ouvert dans Logic par un hum
 ## Développement
 
 ```bash
-cargo test --workspace                                   # 117 tests : golden audio, snapshots du moteur de la page
+cargo test --workspace                                   # 123 tests : golden audio, snapshots du moteur de la page
 cargo clippy --workspace --all-targets -- -D warnings
 cargo xtask bundle make-it-drum --release         # → target/bundled/
 cargo xtask bundle make-it-drum --release --target x86_64-pc-windows-gnu   # cross via mingw
@@ -141,7 +147,7 @@ les hôtes rechargent l'état correctement.
 Structure :
 
 - `crates/core` — cœur pur, sans hôte : `wav` (décodage WAV par hound, AIFF/MP3/FLAC/OGG/M4A par symphonia), `kit` (pack web, `kit.json`, dossier, mapping note → pad, génération, remplacement d'un pad, export `.kit.zip`), `voice` (one-shot interpolé), `engine` (20 voix, mixage). Le moteur porté de la page : `prng` (mulberry32), `analysis` (FFT, profil spectral), `curves` (tables de saturation, enveloppes), `flavors` (les 20 recettes), `dsp` (biquads Web Audio, retard, compresseur, convolution), `render` (`plan` tire les paramètres dans l'ordre de la page, `Shaping` les cadre après tirage sans changer l'ordre des tirages, `render` exécute le graphe). Tests dans `crates/core/tests/` : golden audio, valeurs de référence du JS (`pure.rs`), snapshots du renderer de la page pour la graine 42 (`render.rs`), fixture `tests/fixtures/source.wav` (celle de la page).
-- `crates/plugin` — nih-plug : `slot` (partage GUI / fond / audio sans blocage), `loader` (état persistant, dossier des kits), `params`, `editor` (egui, dans l'esprit de la page : panneau beige, pads à écran LCD avec la forme d'onde), `history` (annuler), `variations` (séries de graines, ⏴ ⏵), `capture` (enregistrement depuis l'entrée auxiliaire, sans blocage du thread audio), `export` (`.kit.zip`, WAV, Drum Rack `.adg` depuis les gabarits de `templates/`), `lib` (le `Plugin`).
+- `crates/plugin` — nih-plug : `slot` (partage GUI / fond / audio sans blocage), `loader` (état persistant, dossier des kits), `params`, `editor` (egui, dans l'esprit de la page : panneau beige, pads à écran LCD avec la forme d'onde), `history` (annuler), `variations` (séries de graines, ‹ ›), `potard` (les contrôles de [potard](https://github.com/yrbane/potard) en egui : logique pure testée, dessin à part), `capture` (enregistrement depuis l'entrée auxiliaire, sans blocage du thread audio), `export` (`.kit.zip`, WAV, Drum Rack `.adg` depuis les gabarits de `templates/`), `lib` (le `Plugin`).
 - `xtask` — bundler nih-plug.
 - `au` — gabarit CMake de l'Audio Unit (clap-wrapper, CLAP embarqué).
 - `vendor/baseview` — copie de la révision épinglée, avec les types de pasteboard que Live utilise pour ses fichiers (liste de chemins et `public.file-url`) et la réponse `Copy | Generic` au survol ; sans lui, Live n'autorise pas le dépôt.

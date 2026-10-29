@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0 — 2026-10-29 · « Les contrôles de potard »
+
+- **Contrôles [potard](https://github.com/yrbane/potard)** portés en egui (`crates/plugin/src/potard.rs`) : `pt-knob` (anneau de valeur sur trois quarts de tour, bipolaire depuis le centre), `pt-slider` (flèche, portion parcourue allumée avec glow, bipolaire depuis zéro), `pt-fader`, `pt-switch` (activator 28 × 14), `pt-stepper` (‹ › avec bouclage), `pt-button` (plat, verrouillé = rempli à l'accent), `pt-led`, `pt-vumeter` (segments vert / jaune / rouge, mémoire de pic). Mêmes attributs (`min`, `max`, `default`, `step`, `label`, `unit`, `sensitivity`, `curve` lin / log, `disabled`, `color`) et mêmes gestes : drag sur un axe à 200 px pour la course, Shift = précision ×10, double-clic = défaut, molette et flèches = un pas, Début / Fin. Thème : accent bleu XP, piste de potard.
+- Toute l'interface les utilise : gain du pied (slider en dB) et **VU-mètre** de sortie (crête par bloc posée par le thread audio), Fidélité / Durée / Départ (sliders en %), durée de capture, boutons de la barre de kit, Nouvelles variations et ses flèches, Mélodique (switch) et son pad (stepper), Durée de la note / Cut itself / Cut by all (switches), knobs Gain / Hauteur / Chute du pad, LED de lecture du pad.
+- Logique pure des contrôles testée à part (courbes, drag, pas, bipolaire, bouclage, segments).
+- Fenêtre 820 × 562 (clé `editor-state-v6`).
+- 123 tests.
+
 ## 0.6.0 — 2026-10-29 · « Le son suit la note »
 
 - **Durée de la note** (paramètre du plugin, coché par défaut) : le relâchement de la note MIDI arrête le son, avec le fondu court de l'étouffement (256 trames). Décoché, chaque frappe joue jusqu'au bout, comme avant. Un clic sur un pad joue toujours jusqu'au bout.
