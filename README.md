@@ -20,8 +20,14 @@ porté en Rust ; le plugin lit aussi les kits exportés par la page.
    les 20 pads se remplissent : BOOM, KICK, THUD, … CHAOS, les 20 recettes de la page.
 3. Jouez : pad 1 = note 36 (C1), pad 2 = 37, … pad 20 = 55. Un clic sur un pad le
    déclenche aussi, et le sélectionne : le panneau de droite règle **gain, hauteur,
-   chute** et **sens de lecture**. La vélocité MIDI est prise en compte. Le nom du pad se
-   modifie dans le panneau.
+   chute**, **sens de lecture**, **Cut itself** (une nouvelle frappe du pad coupe la
+   précédente ; décoché, les frappes se superposent) et **Cut by all** (n'importe quel
+   autre pad frappé coupe celui-ci). La ligne « Tous les pads » met ces deux options sur
+   les 20 pads d'un coup. La vélocité MIDI est prise en compte. Le nom du pad se modifie
+   dans le panneau.
+   **Durée de la note** (coché par défaut) : le son s'arrête, en fondu court, quand la
+   note MIDI est relâchée ; décoché, chaque frappe joue jusqu'au bout. Un clic sur un pad
+   joue toujours jusqu'au bout.
 4. **Clic droit sur un pad** : nouvelle variation de cette recette (nouvelle graine), comme
    le clic sur la page. Le bouton **Nouvelles variations** refait tout le kit. Chaque série
    de variations est mémorisée : **⏴** et **⏵** y reviennent (compteur « 3/7 »), et une
@@ -113,7 +119,7 @@ validé par `auval` en CI ; il n'a pas encore été ouvert dans Logic par un hum
 ## Développement
 
 ```bash
-cargo test --workspace                                   # 109 tests : golden audio, snapshots du moteur de la page
+cargo test --workspace                                   # 117 tests : golden audio, snapshots du moteur de la page
 cargo clippy --workspace --all-targets -- -D warnings
 cargo xtask bundle make-it-drum --release         # → target/bundled/
 cargo xtask bundle make-it-drum --release --target x86_64-pc-windows-gnu   # cross via mingw

@@ -399,6 +399,8 @@ fn pad_settings_are_clamped_and_travel_in_the_kit_zip_only_when_set() {
             reverse: true,
             choke: 9,
             locked: true,
+            cut_self: false,
+            cut_by_all: true,
         },
     )
     .unwrap();
@@ -560,4 +562,31 @@ fn start_moves_the_source_window_keeps_the_whole_source_and_travels_in_the_zip()
         .reshape(Shaping::default().with_start(0.5), |_, _| {})
         .unwrap();
     assert_eq!(moved.pads[0].sample, late.pads[0].sample);
+}
+
+#[test]
+fn cut_itself_and_cut_by_all_travel_in_the_kit_json_in_camel_case() {
+    use make_it_drum_core::kit::PadSettings;
+    let mut kit = Kit::from_zip_bytes("pack", &common::web_pack(22050)).unwrap();
+    assert!(kit.pads[0].settings.cut_self, "cut itself est le défaut");
+    assert!(!kit.pads[0].settings.cut_by_all);
+    kit.set_settings(
+        6,
+        PadSettings {
+            cut_self: false,
+            cut_by_all: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let zip = kit.to_kit_zip().unwrap();
+    let back = Kit::from_zip_bytes("pack", &zip).unwrap();
+    assert!(!back.pads[6].settings.cut_self);
+    assert!(back.pads[6].settings.cut_by_all);
+    assert!(back.pads[7].settings.cut_self);
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip)).unwrap();
+    let mut json = String::new();
+    std::io::Read::read_to_string(&mut archive.by_name("kit.json").unwrap(), &mut json).unwrap();
+    assert!(json.contains("\"cutSelf\": false"), "{json}");
+    assert!(json.contains("\"cutByAll\": true"), "{json}");
 }

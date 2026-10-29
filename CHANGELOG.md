@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.0 — 2026-10-29 · « Le son suit la note »
+
+- **Durée de la note** (paramètre du plugin, coché par défaut) : le relâchement de la note MIDI arrête le son, avec le fondu court de l'étouffement (256 trames). Décoché, chaque frappe joue jusqu'au bout, comme avant. Un clic sur un pad joue toujours jusqu'au bout.
+- **Cut itself**, par pad (défaut : oui) : une nouvelle frappe du pad coupe la précédente, redéclenchement dur comme jusqu'ici. Décoché, les frappes d'un même pad se superposent.
+- **Cut by all**, par pad (défaut : non) : n'importe quel autre pad frappé coupe celui-ci, en fondu court.
+- La ligne « Tous les pads » met chaque option sur les 20 pads d'un coup ; les deux réglages voyagent dans `kit.json` (`cutSelf`, `cutByAll`) et dans le preset.
+- Moteur : une réserve de 32 voix remplace la voix unique par pad ; au-delà, la plus ancienne est reprise. Le mode mélodique relâche la bonne note. Le rendu de référence (golden) ne change pas.
+- Fenêtre 820 × 568 (clé `editor-state-v5`).
+- 117 tests.
+
 ## 0.5.0 — 2026-10-28 · « Moins de boutons, et un retour sur les variations »
 
 - **Retirés de l'interface** : Frappes (sons à tour de rôle), groupe d'étouffement, panoramique et verrou. Le paramètre « Frappes » disparaît du plugin (un preset 0.4.0 se rouvre, ce réglage est ignoré). Le format `kit.json` ne change pas : un kit qui porte encore `pan`, `choke`, `locked` ou des `alternates` se charge et se joue comme avant, simplement sans réglage à l'écran.

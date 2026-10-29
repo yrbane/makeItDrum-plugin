@@ -25,6 +25,10 @@ pub struct KitPlayerParams {
     #[id = "start"]
     pub start: FloatParam,
 
+    /// Durée de la note : le relâchement de la note MIDI arrête le son.
+    #[id = "gate"]
+    pub gate: BoolParam,
+
     /// Mode mélodique : un pad joué sur tout le clavier, transposé.
     #[id = "melodic"]
     pub melodic: BoolParam,
@@ -33,7 +37,7 @@ pub struct KitPlayerParams {
     #[id = "melodic_pad"]
     pub melodic_pad: IntParam,
 
-    #[persist = "editor-state-v4"]
+    #[persist = "editor-state-v5"]
     pub editor_state: Arc<EguiState>,
 
     #[persist = "kit"]
@@ -68,6 +72,7 @@ impl Default for KitPlayerParams {
                 .with_unit(" %")
                 .with_value_to_string(formatters::v2s_f32_percentage(0))
                 .with_string_to_value(formatters::s2v_f32_percentage()),
+            gate: BoolParam::new("Durée de la note", true),
             melodic: BoolParam::new("Mode mélodique", false),
             melodic_pad: IntParam::new(
                 "Pad mélodique",
@@ -77,7 +82,7 @@ impl Default for KitPlayerParams {
                     max: make_it_drum_core::kit::PAD_COUNT as i32,
                 },
             ),
-            editor_state: EguiState::from_size(820, 540),
+            editor_state: EguiState::from_size(820, 568),
             kit_state: Arc::new(RwLock::new(KitState::default())),
         }
     }

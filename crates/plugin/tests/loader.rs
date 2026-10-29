@@ -317,3 +317,39 @@ fn regenerate_with_seeds_brings_a_previous_series_back_bit_for_bit() {
     assert_eq!(back2.pads[5].sample, first.pads[5].sample);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn set_cut_all_changes_only_the_requested_flags_on_every_pad() {
+    use make_it_drum::loader::set_cut_all;
+    use make_it_drum_core::kit::{Kit, PadSettings};
+    let dir = tmp();
+    std::fs::create_dir_all(&dir).unwrap();
+    let zip = dir.join("p.zip");
+    std::fs::write(&zip, pack()).unwrap();
+    let (kit, _) = load_from_path(&zip).unwrap();
+    let mut kit: Kit = (*kit).clone();
+    kit.set_settings(
+        1,
+        PadSettings {
+            gain_db: -6.0,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let (all, state) = set_cut_all(&kit, None, Some(true)).unwrap();
+    assert!(all
+        .pads
+        .iter()
+        .all(|p| p.settings.cut_by_all && p.settings.cut_self));
+    assert_eq!(
+        all.pads[1].settings.gain_db, -6.0,
+        "les autres réglages restent"
+    );
+    assert!(state.zip_base64.is_some());
+    let (none, _) = set_cut_all(&all, Some(false), Some(false)).unwrap();
+    assert!(none
+        .pads
+        .iter()
+        .all(|p| !p.settings.cut_by_all && !p.settings.cut_self));
+    std::fs::remove_dir_all(&dir).ok();
+}

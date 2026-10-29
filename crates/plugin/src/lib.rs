@@ -29,7 +29,7 @@ use history::History;
 use loader::{
     exports_dir, first_kit, generate_from_path, generate_from_sample, kits_dir, load_from_path,
     load_from_state, regenerate, regenerate_with_seeds, rename_pad, replace_pad, reshape, seeds_of,
-    set_settings,
+    set_cut_all, set_settings,
 };
 use make_it_drum_core::kit::PadSettings;
 use params::KitPlayerParams;
@@ -52,6 +52,11 @@ pub enum Task {
     SetSettings { pad: usize, settings: PadSettings },
     /// Renommer un pad (GUI).
     RenamePad { pad: usize, label: String },
+    /// Mettre « cut itself » et/ou « cut by all » sur tous les pads (GUI).
+    SetCutAll {
+        cut_self: Option<bool>,
+        cut_by_all: Option<bool>,
+    },
     /// Revenir à la série de variations précédente (GUI).
     VariationsBack,
     /// Revenir à la série de variations suivante (GUI).
@@ -215,6 +220,13 @@ impl Plugin for KitPlayer {
                 },
                 Task::RenamePad { pad, label } => match slot.current() {
                     Some(current) => rename_pad(&current, pad, &label),
+                    None => Err(make_it_drum_core::kit::KitError::Empty),
+                },
+                Task::SetCutAll {
+                    cut_self,
+                    cut_by_all,
+                } => match slot.current() {
+                    Some(current) => set_cut_all(&current, cut_self, cut_by_all),
                     None => Err(make_it_drum_core::kit::KitError::Empty),
                 },
                 Task::VariationsBack | Task::VariationsForward => {
@@ -421,6 +433,7 @@ impl Plugin for KitPlayer {
             }
         }
         self.engine.set_melodic(self.params.melodic_pad_index());
+        self.engine.set_gate(self.params.gate.value());
         // nouveau kit publié ? (clone d'Arc, sans allocation ni blocage)
         let generation = self.slot.generation();
         if generation != self.seen_generation {
@@ -453,8 +466,12 @@ impl Plugin for KitPlayer {
                 .as_ref()
                 .is_some_and(|e| (e.timing() as usize) <= pos)
             {
-                if let Some(NoteEvent::NoteOn { note, velocity, .. }) = next_event {
-                    self.engine.note_on(note, velocity);
+                match next_event {
+                    Some(NoteEvent::NoteOn { note, velocity, .. }) => {
+                        self.engine.note_on(note, velocity)
+                    }
+                    Some(NoteEvent::NoteOff { note, .. }) => self.engine.note_off(note),
+                    _ => {}
                 }
                 next_event = context.next_event();
             }

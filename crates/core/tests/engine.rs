@@ -340,3 +340,169 @@ fn melodic_mode_plays_one_pad_on_the_whole_keyboard_transposed() {
     e.note_on(36, 1.0);
     assert_ne!(e.playing_mask() & 1, 0, "retour au mode pads");
 }
+
+// ---- durée de la note, cut itself, cut by all
+
+#[test]
+fn note_off_fades_the_note_out_when_the_gate_is_on_and_is_ignored_otherwise() {
+    use make_it_drum_core::voice::CHOKE_FADE_FRAMES;
+    let mut e = Engine::new(44100.0);
+    e.set_kit(Some(kit()));
+    assert!(e.gate(), "suivre la note est le défaut");
+    e.note_on(BASE_NOTE, 1.0);
+    render(&mut e, 64);
+    e.note_off(BASE_NOTE);
+    assert_ne!(e.playing_mask() & 1, 0, "encore actif pendant le fondu");
+    render(&mut e, CHOKE_FADE_FRAMES as usize + 1);
+    assert_eq!(e.playing_mask(), 0, "éteint après le fondu");
+
+    e.set_gate(false);
+    e.note_on(BASE_NOTE, 1.0);
+    render(&mut e, 64);
+    e.note_off(BASE_NOTE);
+    render(&mut e, CHOKE_FADE_FRAMES as usize + 1);
+    assert_ne!(
+        e.playing_mask() & 1,
+        0,
+        "sans suivi, la note joue jusqu'au bout"
+    );
+}
+
+#[test]
+fn a_ui_trigger_plays_to_the_end_even_with_the_gate_on() {
+    use make_it_drum_core::voice::CHOKE_FADE_FRAMES;
+    let k = kit();
+    let frames = k.pads[3].sample.frames();
+    let mut e = Engine::new(44100.0);
+    e.set_kit(Some(k));
+    e.trigger_pad(3, 1.0);
+    render(
+        &mut e,
+        (frames / 2)
+            .max(CHOKE_FADE_FRAMES as usize + 1)
+            .min(frames - 1),
+    );
+    assert_ne!(
+        e.playing_mask() & (1 << 3),
+        0,
+        "joue toujours, sans note à relâcher"
+    );
+}
+
+#[test]
+fn cut_itself_restarts_the_pad_hard_and_without_it_the_same_pad_overlaps() {
+    use make_it_drum_core::kit::PadSettings;
+    let mut single = Engine::new(44100.0);
+    single.set_kit(Some(kit()));
+    single.trigger_pad(0, 1.0);
+    let (reference, _) = render(&mut single, 200);
+
+    let mut cut = Engine::new(44100.0);
+    cut.set_kit(Some(kit()));
+    cut.trigger_pad(0, 1.0);
+    render(&mut cut, 100);
+    cut.trigger_pad(0, 1.0);
+    let (restarted, _) = render(&mut cut, 200);
+    assert_eq!(
+        restarted, reference,
+        "cut itself : la frappe repart de zéro, seule"
+    );
+    assert_eq!(cut.active_voices(), 1);
+
+    let mut poly = Engine::new(44100.0);
+    poly.set_kit(Some(kit_with(|k| {
+        k.set_settings(
+            0,
+            PadSettings {
+                cut_self: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    })));
+    poly.trigger_pad(0, 1.0);
+    render(&mut poly, 100);
+    poly.trigger_pad(0, 1.0);
+    let (layered, _) = render(&mut poly, 200);
+    assert_eq!(poly.active_voices(), 2, "deux voix du même pad");
+    assert_ne!(layered, reference, "les deux frappes se superposent");
+}
+
+#[test]
+fn cut_by_all_fades_the_pad_whenever_any_other_pad_is_hit() {
+    use make_it_drum_core::kit::PadSettings;
+    use make_it_drum_core::voice::CHOKE_FADE_FRAMES;
+    let mut e = Engine::new(44100.0);
+    e.set_kit(Some(kit_with(|k| {
+        k.set_settings(
+            1,
+            PadSettings {
+                cut_by_all: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    })));
+    e.trigger_pad(1, 1.0);
+    e.trigger_pad(2, 1.0);
+    e.trigger_pad(5, 1.0);
+    assert_eq!(e.playing_mask(), 0b100110, "le pad 1 s'éteint en fondu");
+    render(&mut e, CHOKE_FADE_FRAMES as usize + 1);
+    assert_eq!(
+        e.playing_mask(),
+        0b100100,
+        "pad 1 coupé, 2 intact (sans l'option)"
+    );
+    // le pad coupé par tous se rejoue normalement ensuite
+    e.trigger_pad(1, 1.0);
+    assert_ne!(e.playing_mask() & 0b10, 0);
+}
+
+#[test]
+fn beyond_max_voices_the_oldest_voice_is_reused_without_panicking() {
+    use make_it_drum_core::engine::MAX_VOICES;
+    use make_it_drum_core::kit::PadSettings;
+    let mut e = Engine::new(44100.0);
+    e.set_kit(Some(kit_with(|k| {
+        k.set_settings(
+            0,
+            PadSettings {
+                cut_self: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    })));
+    for _ in 0..(MAX_VOICES + 5) {
+        e.trigger_pad(0, 1.0);
+        render(&mut e, 8);
+    }
+    assert_eq!(e.active_voices(), MAX_VOICES);
+    assert_ne!(e.playing_mask() & 1, 0);
+}
+
+#[test]
+fn melodic_note_off_releases_only_that_note() {
+    use make_it_drum_core::voice::CHOKE_FADE_FRAMES;
+    let mut e = Engine::new(44100.0);
+    e.set_kit(Some(kit_with(|k| {
+        k.set_settings(
+            2,
+            make_it_drum_core::kit::PadSettings {
+                cut_self: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    })));
+    e.set_melodic(Some(2));
+    e.note_on(60, 1.0);
+    e.note_on(67, 1.0);
+    assert_eq!(e.active_voices(), 2);
+    e.note_off(60);
+    render(&mut e, CHOKE_FADE_FRAMES as usize + 1);
+    assert_eq!(e.active_voices(), 1, "la quinte joue encore");
+    e.note_off(67);
+    render(&mut e, CHOKE_FADE_FRAMES as usize + 1);
+    assert_eq!(e.active_voices(), 0);
+}

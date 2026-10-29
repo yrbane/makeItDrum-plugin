@@ -865,6 +865,48 @@ pub fn draw(
                                 });
                         });
                     });
+                    ui.horizontal(|ui| {
+                        let mut gate = params.gate.value();
+                        if ui
+                            .checkbox(&mut gate, "Durée de la note")
+                            .on_hover_text("Le son s'arrête quand la note MIDI est relâchée (fondu court)")
+                            .changed()
+                        {
+                            set_bool(setter, &params.gate, gate);
+                        }
+                        ui.separator();
+                        ui.label("Tous les pads :")
+                            .on_hover_text("Met le réglage sur les 20 pads ; chaque pad se règle aussi dans son panneau");
+                        let pads: Vec<&Pad> = current_kit
+                            .as_ref()
+                            .map(|k| k.pads.iter().filter(|p| !p.is_empty()).collect())
+                            .unwrap_or_default();
+                        let mut all_self = !pads.is_empty() && pads.iter().all(|p| p.settings.cut_self);
+                        let mut all_by_all =
+                            !pads.is_empty() && pads.iter().all(|p| p.settings.cut_by_all);
+                        ui.add_enabled_ui(!pads.is_empty(), |ui| {
+                            if ui
+                                .checkbox(&mut all_self, "Cut itself")
+                                .on_hover_text("Une nouvelle frappe du pad coupe la précédente (sinon elles se superposent)")
+                                .changed()
+                            {
+                                run(Task::SetCutAll {
+                                    cut_self: Some(all_self),
+                                    cut_by_all: None,
+                                });
+                            }
+                            if ui
+                                .checkbox(&mut all_by_all, "Cut by all")
+                                .on_hover_text("N'importe quel autre pad frappé coupe celui-ci")
+                                .changed()
+                            {
+                                run(Task::SetCutAll {
+                                    cut_self: None,
+                                    cut_by_all: Some(all_by_all),
+                                });
+                            }
+                        });
+                    });
                     ui.add_space(6.0);
 
                     // ---- pads + panneau du pad
@@ -1107,7 +1149,17 @@ fn pad_panel(
                 .fixed_decimals(2),
         )
         .changed();
-    changed |= ui.checkbox(&mut s.reverse, "Inversé").changed();
+    ui.horizontal(|ui| {
+        changed |= ui.checkbox(&mut s.reverse, "Inversé").changed();
+        changed |= ui
+            .checkbox(&mut s.cut_self, "Cut itself")
+            .on_hover_text("Une nouvelle frappe de ce pad coupe la précédente")
+            .changed();
+    });
+    changed |= ui
+        .checkbox(&mut s.cut_by_all, "Cut by all")
+        .on_hover_text("N'importe quel autre pad frappé coupe celui-ci")
+        .changed();
     if changed {
         state.editing = Some((i, s.clamped()));
     }

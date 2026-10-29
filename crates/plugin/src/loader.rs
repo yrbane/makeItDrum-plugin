@@ -281,3 +281,25 @@ pub fn regenerate_with_seeds(
     let state = state_for(&kit)?;
     Ok((Arc::new(kit), state))
 }
+
+/// Met « cut itself » et/ou « cut by all » sur tous les pads du kit courant
+/// (`None` : inchangé).
+pub fn set_cut_all(
+    current: &Kit,
+    cut_self: Option<bool>,
+    cut_by_all: Option<bool>,
+) -> Result<(Arc<Kit>, KitState), KitError> {
+    let mut kit = current.clone();
+    for i in 0..kit.pads.len() {
+        let mut s = kit.pads[i].settings;
+        if let Some(v) = cut_self {
+            s.cut_self = v;
+        }
+        if let Some(v) = cut_by_all {
+            s.cut_by_all = v;
+        }
+        kit.set_settings(i, s)?;
+    }
+    let state = state_for(&kit)?;
+    Ok((Arc::new(kit), state))
+}

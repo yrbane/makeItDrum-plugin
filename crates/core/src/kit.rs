@@ -80,6 +80,10 @@ pub struct PadSettings {
     pub choke: u8,
     /// Verrouillé : variations, cadrage et variantes de frappe le laissent tel quel.
     pub locked: bool,
+    /// « Cut itself » : une nouvelle frappe de ce pad coupe la précédente.
+    pub cut_self: bool,
+    /// « Cut by all » : n'importe quel autre pad frappé coupe celui-ci.
+    pub cut_by_all: bool,
 }
 
 impl Default for PadSettings {
@@ -92,6 +96,8 @@ impl Default for PadSettings {
             reverse: false,
             choke: 0,
             locked: false,
+            cut_self: true,
+            cut_by_all: false,
         }
     }
 }
@@ -113,6 +119,8 @@ impl PadSettings {
             reverse: self.reverse,
             choke: self.choke.min(Self::MAX_CHOKE),
             locked: self.locked,
+            cut_self: self.cut_self,
+            cut_by_all: self.cut_by_all,
         }
     }
 
