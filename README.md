@@ -33,7 +33,9 @@ porté en Rust ; le plugin lit aussi les kits exportés par la page.
    **drag** vertical sur un knob, horizontal sur un slider (200 px = toute la course),
    **Shift** pendant le drag = précision ×10, **double-clic** = valeur par défaut,
    **molette** et **flèches** du clavier = un pas, **Début / Fin** = bornes. Le VU-mètre du
-   pied montre la crête de sortie avec mémoire de pic.
+   pied montre la crête de sortie avec mémoire de pic. Chaque pad porte la couleur de sa famille
+   sonore : graves en orange, claquants en cyan, métalliques en violet, mouvants en vert,
+   cassés en rose ; les contrôles ont chacun leur teinte.
 4. **Clic droit sur un pad** : nouvelle variation de cette recette (nouvelle graine), comme
    le clic sur la page. Le bouton **Nouvelles variations** refait tout le kit. Chaque série
    de variations est mémorisée : **⏴** et **⏵** y reviennent (compteur « 3/7 »), et une
@@ -125,7 +127,7 @@ validé par `auval` en CI ; il n'a pas encore été ouvert dans Logic par un hum
 ## Développement
 
 ```bash
-cargo test --workspace                                   # 123 tests : golden audio, snapshots du moteur de la page
+cargo test --workspace                                   # 124 tests : golden audio, snapshots du moteur de la page
 cargo clippy --workspace --all-targets -- -D warnings
 cargo xtask bundle make-it-drum --release         # → target/bundled/
 cargo xtask bundle make-it-drum --release --target x86_64-pc-windows-gnu   # cross via mingw

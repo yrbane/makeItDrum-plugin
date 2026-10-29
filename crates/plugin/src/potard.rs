@@ -758,7 +758,7 @@ pub fn button_colored(
             if hot {
                 accent
             } else {
-                fade(theme.track, disabled)
+                fade(accent.gamma_multiply(0.55), disabled)
             },
         )
     };

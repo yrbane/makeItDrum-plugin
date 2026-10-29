@@ -1,4 +1,4 @@
-use make_it_drum::editor::{note_name, waveform_columns};
+use make_it_drum::editor::{note_name, pad_color, waveform_columns, FAMILY_COLORS};
 use make_it_drum_core::wav::Sample;
 
 #[test]
@@ -41,4 +41,13 @@ fn waveform_columns_keep_min_and_max_per_column_and_handle_stereo_and_empty() {
         sample_rate: 44100,
     };
     assert_eq!(waveform_columns(&loud, 1), vec![(-1.0, 1.0)], "borné à ±1");
+}
+
+#[test]
+fn every_family_colours_exactly_four_pads() {
+    for color in FAMILY_COLORS {
+        let n = (0..20).filter(|&i| pad_color(i) == color).count();
+        assert_eq!(n, 4, "{color:?}");
+    }
+    assert_eq!(pad_color(0), pad_color(20), "au-delà de la grille : modulo");
 }

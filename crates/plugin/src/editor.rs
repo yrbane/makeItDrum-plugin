@@ -49,11 +49,43 @@ const PAD_FACE_LIGHT: egui::Color32 = egui::Color32::from_rgb(0x8c, 0x8a, 0x80);
 const PAD_EDGE: egui::Color32 = egui::Color32::from_rgb(0x47, 0x44, 0x3c);
 const RECORD_RED: egui::Color32 = egui::Color32::from_rgb(0xd8, 0x2c, 0x2c);
 
+/// Palette vive de potard, une teinte par usage.
+pub const CYAN: egui::Color32 = egui::Color32::from_rgb(0x19, 0xc2, 0xff);
+pub const ORANGE: egui::Color32 = egui::Color32::from_rgb(0xff, 0x8a, 0x1e);
+pub const LIME: egui::Color32 = egui::Color32::from_rgb(0x3d, 0xdc, 0x84);
+pub const VIOLET: egui::Color32 = egui::Color32::from_rgb(0xb1, 0x8a, 0xff);
+pub const PINK: egui::Color32 = egui::Color32::from_rgb(0xff, 0x5c, 0x8a);
+pub const YELLOW: egui::Color32 = egui::Color32::from_rgb(0xff, 0xd2, 0x3f);
+
 /// Thème des contrôles potard : accent bleu XP, piste de potard.
 const THEME: potard::Theme = potard::Theme {
     accent: XP_BLUE_MID,
     track: potard::TRACK,
 };
+
+/// Le thème potard avec une autre teinte d'accent.
+const fn tinted(accent: egui::Color32) -> potard::Theme {
+    potard::Theme {
+        accent,
+        track: potard::TRACK,
+    }
+}
+
+/// Famille sonore d'un pad (par sa recette, donc son index) et sa couleur :
+/// graves en orange, claquants en cyan, métalliques en violet, mouvants en
+/// vert, cassés en rose.
+pub fn pad_color(index: usize) -> egui::Color32 {
+    match index % PAD_COUNT {
+        0 | 1 | 2 | 18 => ORANGE, // BOOM KICK THUD DARK
+        3 | 4 | 7 | 16 => CYAN,   // SNAP CRACK TICK PERC
+        6 | 8 | 9 | 17 => VIOLET, // RING GLASS WASH BELL
+        5 | 10 | 11 | 14 => LIME, // BUZZ BEND SWELL PHASE
+        _ => PINK,                // STUTTER CRUSH GROWL CHAOS
+    }
+}
+
+/// Les cinq familles, dans l'ordre des pads, pour la bande du bandeau.
+pub const FAMILY_COLORS: [egui::Color32; 5] = [ORANGE, CYAN, VIOLET, LIME, PINK];
 
 const PAD_W: f32 = 96.0;
 const PAD_H: f32 = 60.0;
@@ -251,7 +283,13 @@ pub fn style(ctx: &egui::Context) {
 }
 
 /// Dessine l'écran LCD d'un pad (ou du panneau) avec sa forme d'onde.
-fn draw_lcd(painter: &egui::Painter, rect: egui::Rect, wave: &[(f32, f32)], lit: bool) {
+fn draw_lcd(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    wave: &[(f32, f32)],
+    lit: bool,
+    tint: egui::Color32,
+) {
     painter.rect(
         rect,
         2.0_f32,
@@ -266,7 +304,11 @@ fn draw_lcd(painter: &egui::Painter, rect: egui::Rect, wave: &[(f32, f32)], lit:
     let mid = inner.center().y;
     let half = inner.height() / 2.0;
     let step = inner.width() / wave.len() as f32;
-    let color = if lit { GREEN } else { GREEN_DIM };
+    let color = if lit {
+        GREEN
+    } else {
+        tint.gamma_multiply(0.85)
+    };
     for (i, (lo, hi)) in wave.iter().enumerate() {
         let x = inner.left() + (i as f32 + 0.5) * step;
         let y0 = mid - hi * half;
@@ -345,12 +387,25 @@ fn draw_pad(ui: &mut egui::Ui, look: PadLook) -> egui::Response {
     );
     let screen = rect.shrink(5.0);
     let empty = look.pad.is_none_or(|p| p.is_empty());
+    let tint = pad_color(look.index);
     draw_lcd(
         painter,
         screen,
         if empty { &[] } else { look.wave },
         look.playing,
+        tint,
     );
+    // bande de couleur de la famille, en haut de la face
+    if !empty {
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(rect.left() + 6.0, rect.top() + 2.0),
+                egui::pos2(rect.right() - 6.0, rect.top() + 4.5),
+            ),
+            1.0_f32,
+            tint,
+        );
+    }
 
     let tiny = egui::FontId::new(8.5, egui::FontFamily::Proportional);
     let small = egui::FontId::new(10.5, egui::FontFamily::Proportional);
@@ -368,7 +423,7 @@ fn draw_pad(ui: &mut egui::Ui, look: PadLook) -> egui::Response {
         egui::Align2::RIGHT_BOTTOM,
         note_name(note),
         tiny.clone(),
-        green.gamma_multiply(0.8),
+        if look.playing { green } else { tint },
     );
     let label = look
         .pad
@@ -383,8 +438,10 @@ fn draw_pad(ui: &mut egui::Ui, look: PadLook) -> egui::Response {
         small,
         if empty {
             GREEN_DIM.gamma_multiply(0.6)
-        } else {
+        } else if look.playing {
             GREEN
+        } else {
+            tint
         },
     );
     if let Some(p) = look.pad {
@@ -416,7 +473,7 @@ fn draw_pad(ui: &mut egui::Ui, look: PadLook) -> egui::Response {
             rect.expand(1.0),
             7.0_f32,
             egui::Color32::TRANSPARENT,
-            egui::Stroke::new(2.0_f32, XP_BLUE_MID),
+            egui::Stroke::new(2.0_f32, tint),
             egui::StrokeKind::Outside,
         );
     }
@@ -542,13 +599,17 @@ pub fn draw(
                     );
                     ui.painter()
                         .rect_filled(top, 0.0_f32, XP_BLUE_MID.gamma_multiply(0.35));
-                    ui.painter().line_segment(
-                        [
-                            egui::pos2(bar.min.x, bar.max.y - 0.5),
-                            egui::pos2(bar.max.x, bar.max.y - 0.5),
-                        ],
-                        egui::Stroke::new(1.0_f32, XP_BLUE_MID),
-                    );
+                    let seg = bar.width() / FAMILY_COLORS.len() as f32;
+                    for (k, color) in FAMILY_COLORS.iter().enumerate() {
+                        ui.painter().rect_filled(
+                            egui::Rect::from_min_max(
+                                egui::pos2(bar.min.x + seg * k as f32, bar.max.y - 3.0),
+                                egui::pos2(bar.min.x + seg * (k as f32 + 1.0), bar.max.y),
+                            ),
+                            0.0_f32,
+                            *color,
+                        );
+                    }
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new("make it drum")
@@ -609,6 +670,7 @@ pub fn draw(
                                 .unit("dB")
                                 .decimals(1)
                                 .label("gain")
+                                .color(LIME)
                                 .hint("Double-clic : 0 dB"),
                             150.0,
                         );
@@ -648,7 +710,7 @@ pub fn draw(
                 .show(ctx, |ui| {
                     // ---- barre de kit : choix, annuler, enregistrer, exporter
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("KIT").small().strong().color(XP_BLUE_DARK));
+                        ui.label(egui::RichText::new("KIT").small().strong().color(VIOLET.gamma_multiply(0.8)));
                         egui::ComboBox::from_id_salt("kit-select")
                             .selected_text(&kit_name)
                             .width(190.0)
@@ -682,7 +744,7 @@ pub fn draw(
                             state.show_path = !state.show_path;
                         }
                         ui.separator();
-                        if potard::button(ui, &THEME, "⟲ ANNULER", false, history.is_empty())
+                        if potard::button(ui, &tinted(ORANGE), "⟲ ANNULER", false, history.is_empty())
                             .on_hover_text("Revenir au kit précédent")
                             .clicked()
                         {
@@ -695,7 +757,7 @@ pub fn draw(
                                 .hint_text("nom du kit"),
                         );
                         let can_save = current_kit.is_some() && !state.save_name.trim().is_empty();
-                        if potard::button(ui, &THEME, "ENREGISTRER", false, !can_save)
+                        if potard::button(ui, &tinted(LIME), "ENREGISTRER", false, !can_save)
                             .on_hover_text(format!("En .kit.zip dans {}", kits_dir().display()))
                             .clicked()
                         {
@@ -832,7 +894,7 @@ pub fn draw(
 
                     // ---- cadrage : fidélité, durée, départ
                     ui.horizontal(|ui| {
-                        let percent = |ui: &mut egui::Ui, param: &FloatParam, label, hint| {
+                        let percent = |ui: &mut egui::Ui, param: &FloatParam, label, hint, color| {
                             let mut v = param.value() * 100.0;
                             let g = potard::slider(
                                 ui,
@@ -843,6 +905,7 @@ pub fn draw(
                                     .unit("%")
                                     .decimals(0)
                                     .label(label)
+                                    .color(color)
                                     .hint(hint),
                                 165.0,
                             );
@@ -855,20 +918,23 @@ pub fn draw(
                             &params.fidelity,
                             "fidélité",
                             "0 % : la page. 100 % : le son d'origine, presque tel quel",
+                            CYAN,
                         );
                         percent(
                             ui,
                             &params.length,
                             "durée",
                             "0 % : des percussions. 100 % : étirées vers la durée du son",
+                            ORANGE,
                         );
                         percent(
                             ui,
                             &params.start,
                             "départ",
                             "Point de départ dans le son source",
+                            VIOLET,
                         );
-                        if potard::button(ui, &THEME, "AU TRANSITOIRE", false, !has_source)
+                        if potard::button(ui, &tinted(VIOLET), "AU TRANSITOIRE", false, !has_source)
                             .on_hover_text("Place le départ juste avant l'attaque la plus forte")
                             .clicked()
                         {
@@ -878,14 +944,14 @@ pub fn draw(
                         }
                     });
                     ui.horizontal(|ui| {
-                        if potard::button(ui, &THEME, "NOUVELLES VARIATIONS", false, !has_source)
+                        if potard::button(ui, &tinted(LIME), "NOUVELLES VARIATIONS", false, !has_source)
                             .on_hover_text("Rejoue chaque recette avec une nouvelle graine")
                             .clicked()
                         {
                             run(Task::Regenerate(None));
                         }
                         let (cursor, count) = variations.position();
-                        if potard::arrow_button(ui, &THEME, "‹", cursor <= 1)
+                        if potard::arrow_button(ui, &tinted(LIME), "‹", cursor <= 1)
                             .on_hover_text("Revenir aux variations précédentes")
                             .clicked()
                         {
@@ -900,7 +966,7 @@ pub fn draw(
                             .color(INK_SOFT),
                         )
                         .on_hover_text("Séries de variations de ce son ; chaque série se retrouve avec ‹ et ›");
-                        if potard::arrow_button(ui, &THEME, "›", cursor >= count)
+                        if potard::arrow_button(ui, &tinted(LIME), "›", cursor >= count)
                             .on_hover_text("Revenir aux variations suivantes")
                             .clicked()
                         {
@@ -908,7 +974,7 @@ pub fn draw(
                         }
                         ui.separator();
                         let mut melodic = params.melodic.value();
-                        if potard::switch(ui, &THEME, &mut melodic, "Mélodique", false)
+                        if potard::switch(ui, &tinted(VIOLET), &mut melodic, "Mélodique", false)
                             .on_hover_text("Un seul pad joué sur tout le clavier, transposé (do médian = tel quel)")
                             .changed()
                         {
@@ -925,13 +991,13 @@ pub fn draw(
                             })
                             .collect();
                         let mut index = (params.melodic_pad.value().max(1) - 1) as usize;
-                        if potard::stepper(ui, &THEME, &mut index, &options, 88.0, !melodic) {
+                        if potard::stepper(ui, &tinted(VIOLET), &mut index, &options, 88.0, !melodic) {
                             set_int(setter, &params.melodic_pad, index as i32 + 1);
                         }
                     });
                     ui.horizontal(|ui| {
                         let mut gate = params.gate.value();
-                        if potard::switch(ui, &THEME, &mut gate, "Durée de la note", false)
+                        if potard::switch(ui, &tinted(CYAN), &mut gate, "Durée de la note", false)
                             .on_hover_text("Le son s'arrête quand la note MIDI est relâchée (fondu court)")
                             .changed()
                         {
@@ -949,7 +1015,7 @@ pub fn draw(
                             !pads.is_empty() && pads.iter().all(|p| p.settings.cut_by_all);
                         {
                             let none = pads.is_empty();
-                            if potard::switch(ui, &THEME, &mut all_self, "Cut itself", none)
+                            if potard::switch(ui, &tinted(ORANGE), &mut all_self, "Cut itself", none)
                                 .on_hover_text("Une nouvelle frappe du pad coupe la précédente (sinon elles se superposent)")
                                 .changed()
                             {
@@ -958,7 +1024,7 @@ pub fn draw(
                                     cut_by_all: None,
                                 });
                             }
-                            if potard::switch(ui, &THEME, &mut all_by_all, "Cut by all", none)
+                            if potard::switch(ui, &tinted(PINK), &mut all_by_all, "Cut by all", none)
                                 .on_hover_text("N'importe quel autre pad frappé coupe celui-ci")
                                 .changed()
                             {
@@ -1122,7 +1188,7 @@ fn pad_panel(
             egui::RichText::new(format!("PAD {:02}", i + 1))
                 .small()
                 .strong()
-                .color(XP_BLUE_DARK),
+                .color(pad_color(i).gamma_multiply(0.8)),
         );
         let note = pad.map(|p| p.note).unwrap_or(36 + i as u8);
         ui.label(
@@ -1167,7 +1233,13 @@ fn pad_panel(
     let (rect, _) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 44.0), egui::Sense::hover());
     let wave = waveform_columns(&pad.sample, 110);
-    draw_lcd(ui.painter(), rect, &wave, slot.playing() & (1 << i) != 0);
+    draw_lcd(
+        ui.painter(),
+        rect,
+        &wave,
+        slot.playing() & (1 << i) != 0,
+        pad_color(i),
+    );
     let secs = pad.sample.frames() as f32 / pad.sample.sample_rate.max(1) as f32;
     ui.label(
         egui::RichText::new(format!(
@@ -1200,6 +1272,7 @@ fn pad_panel(
                 .unit("dB")
                 .decimals(1)
                 .label("gain")
+                .color(CYAN)
                 .hint("Double-clic : 0 dB · Shift : précis"),
             44.0,
         )
@@ -1213,6 +1286,7 @@ fn pad_panel(
                 .unit("st")
                 .decimals(1)
                 .label("hauteur")
+                .color(VIOLET)
                 .hint("Demi-tons · double-clic : 0"),
             44.0,
         )
@@ -1225,6 +1299,7 @@ fn pad_panel(
                 .step(0.05)
                 .decimals(2)
                 .label("chute")
+                .color(ORANGE)
                 .hint("Part du son jouée, fondu sur la fin"),
             44.0,
         )
@@ -1242,12 +1317,12 @@ fn pad_panel(
     });
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 10.0;
-        changed |= potard::switch(ui, &THEME, &mut s.reverse, "Inversé", false).changed();
-        changed |= potard::switch(ui, &THEME, &mut s.cut_self, "Cut itself", false)
+        changed |= potard::switch(ui, &tinted(LIME), &mut s.reverse, "Inversé", false).changed();
+        changed |= potard::switch(ui, &tinted(ORANGE), &mut s.cut_self, "Cut itself", false)
             .on_hover_text("Une nouvelle frappe de ce pad coupe la précédente")
             .changed();
     });
-    changed |= potard::switch(ui, &THEME, &mut s.cut_by_all, "Cut by all", false)
+    changed |= potard::switch(ui, &tinted(PINK), &mut s.cut_by_all, "Cut by all", false)
         .on_hover_text("N'importe quel autre pad frappé coupe celui-ci")
         .changed();
     if changed {
@@ -1255,12 +1330,12 @@ fn pad_panel(
     }
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        if potard::button(ui, &THEME, "⏵ JOUER", false, false).clicked() {
+        if potard::button(ui, &tinted(LIME), "⏵ JOUER", false, false).clicked() {
             slot.request_trigger(i);
         }
         if potard::button(
             ui,
-            &THEME,
+            &tinted(LIME),
             "VARIATION",
             false,
             !(has_source && pad.seed.is_some()),

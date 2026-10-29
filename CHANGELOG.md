@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.1 — 2026-10-29 · « De la couleur »
+
+- **Cinq familles de pads, cinq couleurs** : graves en orange (BOOM, KICK, THUD, DARK), claquants en cyan (SNAP, CRACK, TICK, PERC), métalliques en violet (RING, GLASS, WASH, BELL), mouvants en vert (BUZZ, BEND, SWELL, PHASE), cassés en rose (STUTTER, CRUSH, GROWL, CHAOS). Bande de couleur en haut de chaque pad, forme d'onde, nom et note dans la teinte de la famille (vert LCD à la frappe), cadre de sélection et en-tête du panneau assortis. Bande des cinq couleurs sous la barre de titre.
+- **Une teinte par contrôle** : Fidélité cyan, Durée orange, Départ violet ; gain du pad cyan, hauteur violet, chute orange ; Durée de la note cyan, Cut itself orange, Cut by all rose, Inversé et Mélodique en vert et violet ; Nouvelles variations, Jouer, Variation, Enregistrer en vert, Annuler orange, Au transitoire violet, gain du pied vert. Le bord des boutons prend leur teinte.
+- 124 tests.
+
 ## 0.7.0 — 2026-10-29 · « Les contrôles de potard »
 
 - **Contrôles [potard](https://github.com/yrbane/potard)** portés en egui (`crates/plugin/src/potard.rs`) : `pt-knob` (anneau de valeur sur trois quarts de tour, bipolaire depuis le centre), `pt-slider` (flèche, portion parcourue allumée avec glow, bipolaire depuis zéro), `pt-fader`, `pt-switch` (activator 28 × 14), `pt-stepper` (‹ › avec bouclage), `pt-button` (plat, verrouillé = rempli à l'accent), `pt-led`, `pt-vumeter` (segments vert / jaune / rouge, mémoire de pic). Mêmes attributs (`min`, `max`, `default`, `step`, `label`, `unit`, `sensitivity`, `curve` lin / log, `disabled`, `color`) et mêmes gestes : drag sur un axe à 200 px pour la course, Shift = précision ×10, double-clic = défaut, molette et flèches = un pas, Début / Fin. Thème : accent bleu XP, piste de potard.
