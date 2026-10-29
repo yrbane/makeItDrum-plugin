@@ -755,10 +755,12 @@ pub fn button_colored(
         (
             fade(ui.visuals().widgets.inactive.weak_bg_fill, disabled),
             fade(ink, disabled),
-            if hot {
+            if disabled {
+                theme.track.gamma_multiply(0.6)
+            } else if hot {
                 accent
             } else {
-                fade(accent.gamma_multiply(0.55), disabled)
+                accent.gamma_multiply(0.55)
             },
         )
     };
